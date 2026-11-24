@@ -292,7 +292,7 @@ button.primary{background:var(--accent);border-color:var(--accent);color:white}b
 </div>
 
 
-<div class="modalback" id="firstOrderBack">
+<dialog id="giftEditDialog" style="width:min(440px,90vw);border:1px solid #ccc;border-radius:14px;padding:16px"><form id="giftEditForm"><h3>商品資料</h3><label>條碼<input id="giftEdit_code" required style="width:100%"></label><label>品名<input id="giftEdit_name" required style="width:100%"></label><label>國際條碼<input id="giftEdit_international" style="width:100%"></label><label>部門<input id="giftEdit_department" required pattern="[A-Za-z][0-9]{2}" style="width:100%"></label><button type="submit" class="primary">儲存</button><button type="button" onclick="document.getElementById('giftEditDialog').close()">取消</button></form></dialog><div class="modalback" id="firstOrderBack">
  <section class="modal" style="width:min(820px,100%);max-height:94vh;overflow:auto">
   <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
    <div><h2 style="margin:0">第一單追蹤</h2><div class="sub">檔期面銷與賣品當贈品加訂分開管理</div></div>
@@ -313,7 +313,14 @@ button.primary{background:var(--accent);border-color:var(--accent);color:white}b
     <div class="sub" style="margin-top:10px;padding-top:8px;border-top:1px solid #eee">永久商品資料庫：保留曾匯入的商品編號、條碼、品名及加購價；刪除檔期不會刪除這些商品基本資料。</div>
    </section>
   </section>
-  <div class="opl-toolbar">
+  <section id="giftManager" hidden class="first-import-panel">
+ <details><summary><strong>賣轉贈商品資料管理</strong></summary>
+ <div class="first-import-controls"><label class="import-file-label">選擇 Excel<input type="file" id="giftFile" accept=".xlsx,.xls,.xlsm"></label><button id="giftPreviewBtn">讀取並預覽</button><button id="giftCommit" disabled>確認匯入</button></div>
+ <p id="giftStatus" class="sub" role="status"></p><div id="giftPreview"></div>
+ <details><summary>匯入紀錄</summary><div id="giftBatches"></div></details>
+ <button id="giftAdd">＋ 手動新增商品</button><select id="giftDept"></select><input id="giftSearch" placeholder="搜尋條碼、品名" style="width:100%"><button id="giftDeleteSelected">刪除勾選商品</button><div id="giftRows"></div><button id="giftMore">顯示更多</button>
+ </details></section>
+ <div class="opl-toolbar">
    <button type="button" class="primary" id="firstOrderAddBtn">＋ 新增面銷</button>
   </div>
   <div id="firstOrderList"></div>
@@ -1319,14 +1326,14 @@ function render(){
    const found=matching.filter(t=>t.name.toLowerCase()===item.toLowerCase());
    return `<div class="subitem"><span class="dot" style="width:6px;height:6px;background:${c.color}"></span><button onclick="showCategoryItem('${esc(c.name)}','${esc(item)}')">${esc(item)}</button><span class="count">${found.length||""}</span></div>`;
   }).join("");
-  return `<div><button class="catbutton ${open?"active":""}" onclick="toggleCategory('${esc(c.name)}')"><span class="dot" style="background:${c.color}"></span>${esc(c.name)}<span class="arrow">${open?"⌄":"›"}</span></button>${open?`<div class="catdetails">${subs}${c.name==="換檔"?`<button class="menuadd" onclick="addCategoryTask('${esc(c.name)}')">＋ 新增${esc(c.name)}工作</button>`:""}</div>`:""}</div>`;
+  return `<div><button class="catbutton ${open?"active":""}" onclick="toggleCategory('${esc(c.name)}')"><span class="dot" style="background:${c.color}"></span>${esc(c.name)}<span class="arrow">${open?"⌄":"›"}</span></button>${open?`<div class="catdetails">${subs}</div>`:""}</div>`;
  }).join("");
  const pageHost=$("categoryPageContent");
  if(pageHost){pageHost.innerHTML=categories.map(c=>{
   const open=expandedCategory===c.name;
   const matching=tasks.filter(t=>t.category===c.name);
   const subs=c.items.map(item=>{const found=matching.filter(t=>t.name.toLowerCase()===item.toLowerCase());return `<div class="subitem"><span class="dot" style="width:6px;height:6px;background:${c.color}"></span><button onclick="showCategoryItem('${esc(c.name)}','${esc(item)}')">${esc(item)}</button><span class="count">${found.length||""}</span></div>`;}).join("");
-  return `<div class="category-tile"><button class="catbutton ${open?"active":""}" onclick="toggleCategory('${esc(c.name)}')"><span class="dot" style="background:${c.color}"></span>${esc(c.name)}<span class="arrow">${open?"⌄":"›"}</span></button>${open?`<div class="catdetails">${subs}${c.name==="換檔"?`<button class="menuadd" onclick="addCategoryTask('${esc(c.name)}')">＋ 新增${esc(c.name)}工作</button>`:""}</div>`:""}</div>`;
+  return `<div class="category-tile"><button class="catbutton ${open?"active":""}" onclick="toggleCategory('${esc(c.name)}')"><span class="dot" style="background:${c.color}"></span>${esc(c.name)}<span class="arrow">${open?"⌄":"›"}</span></button>${open?`<div class="catdetails">${subs}</div>`:""}</div>`;
  }).join("");}
 }
 const PROJECT_PROGRESS_KEY="po_yat_project_progress_v1";
@@ -1739,7 +1746,7 @@ function saveFirstOrder(){try{localStorage.setItem("po_yat_first_order_v1",JSON.
 function openFirstOrder(){firstTab="face";firstEditing=null;const cs=getFirstCampaigns();if(!activeFirstCampaign&&cs.length===1)activeFirstCampaign=cs[0];if(activeFirstCampaign)syncImportedProductsToFirstOrders(activeFirstCampaign);$("firstOrderEditBack").classList.remove("show");$("firstOrderBack").classList.add("show");renderFirstCampaignManager();renderFirstOrder();}
 function renderFirstOrder(){
  $("firstFaceTab").classList.toggle("active",firstTab==="face");$("firstGiftTab").classList.toggle("active",firstTab==="gift");
- $("firstImportPanel").style.display=firstTab==="face"?"block":"none";
+ $("firstImportPanel").style.display=firstTab==="face"?"block":"none"; $("giftManager").hidden=firstTab!=="gift"; if(firstTab==="gift")renderGift();
  $("firstOrderAddBtn").textContent=firstTab==="face"?"＋ 手動補登面銷":"＋ 新增贈品加訂";
  const baseRows=firstTab==="face"&&activeFirstCampaign?firstOrderData.face.filter(x=>x.campaign===activeFirstCampaign):firstOrderData[firstTab],rows=baseRows;
  $("firstOrderList").innerHTML=firstTab==="face"&&activeFirstCampaign?`<div class="sub" style="margin:8px 0 12px">目前檔期：<strong>${esc(activeFirstCampaign)}</strong>｜共 ${baseRows.length} 筆商品</div>`:"";
@@ -1831,6 +1838,25 @@ $("firstOrderForm").addEventListener("submit",e=>{
  else firstOrderData[firstTab].push({id:makeId(),...data,createdAt:new Date().toISOString()});
  firstEditing=null;$("firstOrderEditBack").classList.remove("show");saveFirstOrder();
 });
+
+
+const GIFT_KEY='po_yat_gift_catalog_v1';
+let giftDB={rows:[],batches:[]};try{const g=JSON.parse(localStorage.getItem(GIFT_KEY)||'null');if(g&&Array.isArray(g.rows)&&Array.isArray(g.batches))giftDB=g}catch(e){}
+let giftPending=null,giftLimit=50,giftSelected=new Set();
+function giftSave(next){try{localStorage.setItem(GIFT_KEY,JSON.stringify(next));giftDB=next;renderGift();return true}catch(e){alert('儲存失敗，原資料未變更：'+e.message);return false}}
+function giftCode(v){return String(v??'').trim().replace(/^=?"(.*)"$/,'$1')}
+function giftParse(rows){let h=rows.findIndex(r=>r.includes('條碼')&&r.includes('品名')&&r.includes('小分類'));if(h<0)throw Error('找不到條碼、品名、小分類欄位');let cols=rows[h],get=(r,k)=>giftCode(r[cols.indexOf(k)]),out=new Map();for(let r of rows.slice(h+1)){let code=get(r,'條碼'),name=get(r,'品名');if(!code||!name)continue;let classification=get(r,'小分類');out.set(code,{code,name,international:get(r,'國際條碼'),department:classification.slice(0,3).toUpperCase(),classification,minor:get(r,'小小分類'),price:get(r,'鐵粉價'),wholesale:get(r,'批價'),vendor:get(r,'廠商'),pack:get(r,'箱入數')})}return [...out.values()]}
+function renderGift(){let d=$('giftDept'),old=d.value;d.innerHTML='<option value="">全部部門</option>'+[...new Set([...DEPARTMENTS.map(x=>x.split('-')[0]),...giftDB.rows.map(x=>x.department)])].filter(Boolean).map(x=>`<option value="${esc(x)}">${esc(DEPARTMENTS.find(y=>y.startsWith(x+'-'))||x)}</option>`).join('');d.value=old;let q=$('giftSearch').value.trim().toLowerCase(),rows=giftDB.rows.filter(x=>(!d.value||x.department===d.value)&&[x.code,x.name,x.international].some(v=>String(v||'').toLowerCase().includes(q)));$('giftRows').innerHTML=`<p class="sub">共 ${rows.length} 筆，顯示 ${Math.min(rows.length,giftLimit)} 筆</p>`+rows.slice(0,giftLimit).map(x=>`<div class="opl-card"><label><input type="checkbox" data-gift-check="${esc(x.id)}" ${giftSelected.has(x.id)?'checked':''}> ${esc(x.name)}</label><div class="opl-meta">${esc(x.department)}｜條碼：${esc(x.code)}｜國際條碼：${esc(x.international||'—')}</div><div class="opl-actions"><button data-gift-use="${esc(x.id)}">加入加訂</button><button data-gift-edit="${esc(x.id)}">修改</button><button data-gift-del="${esc(x.id)}">刪除</button></div></div>`).join('');$('giftMore').hidden=rows.length<=giftLimit;$('giftBatches').innerHTML=giftDB.batches.map(b=>`<div class="opl-card">${esc(b.name)}<div class="sub">${esc(b.date)}｜${giftDB.rows.filter(x=>x.batch===b.id).length} 筆現存商品</div><button data-batch-view="${esc(b.id)}">查看</button><button data-batch-edit="${esc(b.id)}">修改名稱</button><button data-batch-del="${esc(b.id)}">刪除批次</button></div>`).join('')||'尚無匯入紀錄';}
+$('giftPreviewBtn').onclick=async()=>{giftPending=null;$('giftCommit').disabled=true;$('giftPreview').innerHTML='';try{let f=$('giftFile').files[0];if(!f)throw Error('請選擇檔案');if(!window.XLSX)throw Error('Excel 模組尚未載入');let w=XLSX.read(await f.arrayBuffer(),{type:'array'}),rows=giftParse(XLSX.utils.sheet_to_json(w.Sheets[w.SheetNames[0]],{header:1,defval:'',raw:true}));if(!rows.length)throw Error('無商品');let existing=new Map(giftDB.rows.map(x=>[x.code,x]));let changed=rows.filter(x=>existing.has(x.code));giftPending={name:f.name,rows};$('giftStatus').textContent=`共 ${rows.length} 筆，新增 ${rows.length-changed.length} 筆，既有 ${changed.length} 筆（預設保留原資料）`; $('giftPreview').innerHTML=rows.slice(0,20).map(x=>`<div class="sub">${esc(x.department)}｜${esc(x.code)}｜${esc(x.name)}${existing.has(x.code)?'（既有）':''}</div>`).join('')+(changed.length?'<label><input type="checkbox" id="giftOverwrite"> 更新既有商品（包含手動修改資料）</label>':'');$('giftCommit').disabled=false}catch(e){$('giftStatus').textContent=e.message}};
+$('giftFile').onchange=()=>{giftPending=null;$('giftCommit').disabled=true;$('giftPreview').innerHTML='';$('giftStatus').textContent='請讀取並預覽'};
+$('giftCommit').onclick=()=>{if(!giftPending)return;let next=JSON.parse(JSON.stringify(giftDB)),batch={id:makeId(),name:giftPending.name,date:new Date().toLocaleString()},overwrite=$('giftOverwrite')?.checked; if(overwrite&&!confirm('確定更新既有商品？'))return;for(let x of giftPending.rows){let i=next.rows.findIndex(y=>y.code===x.code);if(i<0)next.rows.push({...x,id:makeId(),batch:batch.id});else if(overwrite)next.rows[i]={...next.rows[i],...x,batch:batch.id}}next.batches.push(batch);if(giftSave(next)){giftPending=null;$('giftCommit').disabled=true;$('giftPreview').innerHTML='';$('giftFile').value='';$('giftStatus').textContent='匯入完成'}};
+function giftEdit(id){let x=giftDB.rows.find(y=>y.id===id)||{};let dialog=$('giftEditDialog');for(let k of ['code','name','international','department'])$('giftEdit_'+k).value=x[k]||'';dialog.dataset.id=id||'';dialog.showModal()}
+$('giftEditForm').onsubmit=e=>{e.preventDefault();let id=$('giftEditDialog').dataset.id,next=JSON.parse(JSON.stringify(giftDB)),x=Object.fromEntries(['code','name','international','department'].map(k=>[k,$('giftEdit_'+k).value.trim()]));x.department=x.department.toUpperCase();if(!x.code||!x.name||!x.department)return alert('請填寫必要欄位');if(next.rows.some(y=>y.code===x.code&&y.id!==id))return alert('條碼已存在');let i=next.rows.findIndex(y=>y.id===id);if(i>=0)next.rows[i]={...next.rows[i],...x};else next.rows.push({...x,id:makeId(),batch:''});if(giftSave(next))$('giftEditDialog').close()};
+$('giftAdd').onclick=()=>giftEdit('');$('giftSearch').oninput=$('giftDept').onchange=()=>{giftLimit=50;renderGift()};$('giftMore').onclick=()=>{giftLimit+=50;renderGift()};
+function giftDelete(ids){if(!ids.length||!confirm(`刪除 ${ids.length} 筆商品？既有加訂紀錄保留。`))return; if(giftSave({...giftDB,rows:giftDB.rows.filter(x=>!ids.includes(x.id))}))ids.forEach(x=>giftSelected.delete(x))}
+$('giftDeleteSelected').onclick=()=>giftDelete([...giftSelected]);$('giftRows').onchange=e=>{let id=e.target.dataset.giftCheck;if(id)e.target.checked?giftSelected.add(id):giftSelected.delete(id)};
+$('giftRows').onclick=e=>{let d=e.target.dataset;if(d.giftEdit)giftEdit(d.giftEdit);if(d.giftDel)giftDelete([d.giftDel]);if(d.giftUse){let x=giftDB.rows.find(y=>y.id===d.giftUse);if(!x)return;showFirstOrderForm();$('firstBarcode').value=x.code;$('firstBarcodeAlt').value=x.international;$('firstName').value=x.name}};
+$('giftBatches').onclick=e=>{let d=e.target.dataset,id=d.batchView||d.batchEdit||d.batchDel,b=giftDB.batches.find(x=>x.id===id);if(!b)return;if(d.batchView){let rows=giftDB.rows.filter(x=>x.batch===id);$('giftStatus').textContent=b.name+'：'+rows.length+' 筆';$('giftPreview').innerHTML=rows.slice(0,50).map(x=>`<div class="sub">${esc(x.code)}｜${esc(x.name)}</div>`).join('');}if(d.batchEdit){let name=prompt('修改匯入紀錄名稱',b.name);if(name?.trim())giftSave({...giftDB,batches:giftDB.batches.map(x=>x.id===id?{...x,name:name.trim()}:x)})}if(d.batchDel&&confirm('刪除此批次目前所屬商品？既有加訂紀錄保留。'))giftSave({rows:giftDB.rows.filter(x=>x.batch!==id),batches:giftDB.batches.filter(x=>x.id!==id)})};
 
 // 面銷 Excel 匯入：商品主檔與第一單追蹤紀錄分開保存，匯入不會改動既有訂貨資料。
 let pendingFaceImport=null;
@@ -2620,7 +2646,7 @@ function switchMobilePage(target){
 <div class="modalback" id="backupBack" style="z-index:90"><section class="modal" style="max-height:90vh;overflow:auto;width:min(620px,100%)"><h2>備份與還原</h2><p id="backupSpace"></p><p id="backupLast"></p><h3>資料備份</h3><button onclick="backupExport(true)">完整備份</button><h3>選擇備份／還原項目</h3><div id="backupGroups"></div><button onclick="backupExport(false)">選擇項目備份</button><hr><h3>資料還原</h3><input type="file" id="backupFile" accept=".json,application/json"><p id="backupInfo"></p><label>還原方式 <select id="backupMode"><option value="merge">合併（現有資料優先）</option><option value="replace">覆蓋所選項目</option></select></label><p>還原前會先下載目前完整備份，請確認下載成功。</p><button onclick="backupPrepare()">下載還原前備份</button><button id="backupApply" disabled onclick="backupRestore()">確認還原</button><hr><h3>備份與還原紀錄</h3><div id="backupHistory"></div><button onclick="document.getElementById('backupBack').classList.remove('show')">關閉</button></section></div><script>
 (()=>{
 const E=id=>document.getElementById(id), H='po_yat_backup_history_v1';
-const groups={ '共用部門':['departments_v1'],'共用分店':['stores_v1'],'工作分類':['work_categories_v1','work_category_routes_v1'],'連動排程':['link_rules_v1','link_migrated_v1','routine_rules_v1'],'月曆及待安排工作':['tasks_v1'],'MQC':['shelf_config_v1','inspections_v1'],'專案':['project_progress_v1'],'換檔':['changeover_v1','changeover_items_v1'],'訂貨':['opl_v1','first_order_v1','barcode_name_map_v1','first_product_master_v1','first_product_catalog_v1','first_campaigns_v1'],'承租':['rent_management_v1','rent_items_v2','rent_my_store_v1','rent_my_store_status_v1'],'工作照片':[],'承租照片':[],'外觀設定':['appearance_v1'],'其他系統設定':[]};
+const groups={ '共用部門':['departments_v1'],'共用分店':['stores_v1'],'工作分類':['work_categories_v1','work_category_routes_v1'],'連動排程':['link_rules_v1','link_migrated_v1','routine_rules_v1'],'月曆及待安排工作':['tasks_v1'],'MQC':['shelf_config_v1','inspections_v1'],'專案':['project_progress_v1'],'換檔':['changeover_v1','changeover_items_v1'],'訂貨':['opl_v1','first_order_v1','barcode_name_map_v1','first_product_master_v1','first_product_catalog_v1','first_campaigns_v1','gift_catalog_v1'],'承租':['rent_management_v1','rent_items_v2','rent_my_store_v1','rent_my_store_status_v1'],'工作照片':[],'承租照片':[],'外觀設定':['appearance_v1'],'其他系統設定':[]};
 const dbs={'工作照片':'po_yat_photo_db_v1','承租照片':'po_yat_rent_photo_db_v1'}; const known=Object.values(groups).flat().map(k=>'po_yat_'+k); let incoming=null, safety=null, restoring=false;
 const keys=()=>Object.keys(localStorage).filter(k=>k.startsWith('po_yat_')&&k!==H); const groupKeys=g=>g==='其他系統設定'?keys().filter(k=>!known.includes(k)):groups[g].map(k=>'po_yat_'+k);
 const chosen=()=>Array.from(E('backupGroups').querySelectorAll('input:checked')).map(x=>x.value);
