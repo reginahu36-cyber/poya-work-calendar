@@ -1053,12 +1053,16 @@ let CO_ITEMS=(()=>{try{const saved=JSON.parse(localStorage.getItem("po_yat_chang
 const changeoverCategory=categories.find(x=>x.name==="換檔");
 if(changeoverCategory){
  const configured=Array.isArray(changeoverCategory.items)?changeoverCategory.items:[];
- changeoverCategory.items=Array.from(new Set([...configured,...CO_ITEMS]));
+ changeoverCategory.items=Array.from(new Set(configured));
+ for(const name of configured) if(!CO_ITEMS.includes(name)) CO_ITEMS.push(name);
+ localStorage.setItem("po_yat_changeover_items_v1",JSON.stringify(CO_ITEMS));
 }
 const CO_STATUSES=["待確認","本檔更換","沿用陳列","準備下架","已下架"];
 function saveChangeovers(){localStorage.setItem("po_yat_changeover_v1",JSON.stringify(changeoverRecords));renderChangeoverRecords();}
 function openChangeoverManager(category){
- activeCoCategory=CO_ITEMS.includes(category)?category:"檔頭";
+ if(!categories.find(c=>c.name==="換檔")?.items.includes(category))return;
+ if(!CO_ITEMS.includes(category)){CO_ITEMS.push(category);localStorage.setItem("po_yat_changeover_items_v1",JSON.stringify(CO_ITEMS));}
+ activeCoCategory=category;
  $("changeoverBack").querySelector("h2").textContent=activeCoCategory+"｜檔期管理";
  $("changeoverBack").querySelector(".sub").textContent="只顯示「"+activeCoCategory+"」的檔期紀錄；其他陳列分類各自獨立管理。";
  renderChangeoverRecords();
@@ -1106,7 +1110,7 @@ function renderChangeoverRecords(){
  }).join("");
 }
 window.openChangeoverDetail=(id,i)=>{
- activeCoRecordId=id;activeCoItemIndex=i;
+ activeCoRecordId=id;activeCoItemIndex=i;activeCoCategory=CO_ITEMS[i];
  const r=changeoverRecords.find(x=>x.id===id);if(!r)return;
  const item=r.items[i]||(r.items[i]={status:"待確認",start:"",last:"",delisted:"",photos:[],note:""});
  if(!Array.isArray(item.shelves))item.shelves=[];
@@ -1197,7 +1201,7 @@ window.openCoShelfTransfer=(id,i,si)=>{
  const source=changeoverRecords.find(x=>x.id===id);if(!source||!source.items?.[i]?.shelves?.[si])return;
  pendingCoShelfTransfer={id,i,si};
  const cat=$("coTransferCategory"),period=$("coTransferPeriod");
- cat.innerHTML=CO_ITEMS.map((name,idx)=>`<option value="${idx}">${esc(name)}</option>`).join("");
+ cat.innerHTML=CO_ITEMS.map((name,idx)=>categories.find(c=>c.name==="換檔")?.items.includes(name)?`<option value="${idx}">${esc(name)}</option>`:"").join("");
  const fillPeriods=()=>{
   const targetCategory=cat.value;
   const records=changeoverRecords.slice().sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
@@ -2004,6 +2008,7 @@ $("firstImportCommitBtn").addEventListener("click",()=>{
 $("firstImportFile").addEventListener("change",()=>{pendingFaceImport=null;$("firstImportCommitBtn").disabled=true;$("firstImportPreview").style.display="none";setFaceImportStatus("檔案已選取，請按「讀取並預覽」。");});
 
 window.showCategoryItem=(category,name)=>{
+ if(category==="換檔"&&categories.find(c=>c.name===category)?.items.includes(name)){openChangeoverManager(name);return;}
  const route=resolveWorkCategoryRoute(category,name);category=route.category;name=route.item;
  if(category==="專案"&&name==="專案執行"){openProjectProgress();return;}
  if(category==="換檔"&&CO_ITEMS.includes(name)){openChangeoverManager(name);return;}
@@ -2362,6 +2367,7 @@ $("rentExportBackup").onclick=async()=>{
 };
 $("rentRestoreFile").onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const data=JSON.parse(await f.text());if(!Array.isArray(data.campaigns))throw new Error('備份格式不正確');if(!confirm('還原備份會以備份內容取代目前承租管理資料，確定繼續？'))return;rentDB=data;const photoBlobs=data._photoBlobs||{};for(const [id,dataUrl] of Object.entries(photoBlobs)){const blob=await (await fetch(dataUrl)).blob();const db=await rentPhotoDB();await new Promise((resolve,reject)=>{const tx=db.transaction(RENT_PHOTO_STORE,'readwrite');tx.objectStore(RENT_PHOTO_STORE).put({id,blob,name:'備份還原照片.jpg',createdAt:Date.now()});tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});db.close();}delete rentDB._photoBlobs;rentMyStore=data._myStore||rentMyStore;rentMyStatus=data._myStoreStatus||rentMyStatus;try{localStorage.setItem(RENT_MY_STORE_KEY,rentMyStore);localStorage.setItem(RENT_MY_STATUS_KEY,JSON.stringify(rentMyStatus));}catch(e){}delete rentDB._myStore;delete rentDB._myStoreStatus;rentActiveCampaignId=rentDB.campaigns[0]?.id||'';await saveRent();renderRentManager();alert('備份還原完成。');}catch(err){alert('還原失敗：'+err.message);}e.target.value='';};
 window.showCategoryItem=(category,name)=>{
+ if(category==="換檔"&&categories.find(c=>c.name===category)?.items.includes(name)){openChangeoverManager(name);return;}
  const route=resolveWorkCategoryRoute(category,name);category=route.category;name=route.item;
  if(category==="專案"&&name==="專案執行"){openProjectProgress();return;}
  if(category==="換檔"&&CO_ITEMS.includes(name)){openChangeoverManager(name);return;}
