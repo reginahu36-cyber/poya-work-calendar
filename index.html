@@ -480,7 +480,7 @@ button.primary{background:var(--accent);border-color:var(--accent);color:white}b
 </style>
 
 
-<div class="modalback" id="linkBack" style="z-index:55"><section class="modal" style="max-height:92vh;overflow:auto;width:min(650px,100%)"><h2>連動排程管理</h2><p class="sub">任一工作可作為日期起點。修改規則不會立即改動既有工作。</p><div id="linkList"></div><button type="button" onclick="linkAddGroup()">＋ 新增排程組</button> <button type="button" onclick="linkSave()" class="primary">儲存</button> <button type="button" onclick="$('linkBack').classList.remove('show')">取消</button></section></div>
+<div class="modalback" id="linkBack" style="z-index:55"><section class="modal" style="max-height:92vh;overflow:auto;width:min(650px,100%)"><h2>連動排程管理</h2><p class="sub">任一工作可作為日期起點。儲存前預覽月曆異動；未參與連動的工作不受影響。</p><div id="linkList"></div><button type="button" onclick="linkAddGroup()">＋ 新增排程組</button> <button type="button" onclick="linkSave()" class="primary">儲存</button> <button type="button" onclick="$('linkBack').classList.remove('show')">取消</button></section></div>
 <div class="modalback" id="workCategorySettingsBack" style="z-index:45">
  <section class="modal" style="width:min(760px,100%);max-height:92vh;overflow:auto">
   <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
@@ -1296,7 +1296,7 @@ function render(){
  const first=new Date(view.getFullYear(),view.getMonth(),1), start=new Date(first);start.setDate(1-first.getDay());
  let cells="";
  for(let i=0;i<42;i++){
-  const d=new Date(start);d.setDate(start.getDate()+i);const key=iso(d),dayTasks=tasks.filter(t=>Boolean(t.date)&&t.date===key);
+  const d=new Date(start);d.setDate(start.getDate()+i);const key=iso(d),dayTasks=tasks.filter(t=>Boolean(t.date)&&t.date<=key&&addDays(t.date,(t.duration||1)-1)>=key);
   cells+=`<div class="day ${d.getMonth()!==view.getMonth()?"other":""} ${key===selected?"selected":""} ${key===iso(now)?"today":""}" data-date="${key}"><div class="num">${d.getDate()}</div>${dayTasks.slice(0,3).map(t=>`<div class="event" style="background:${cat(t.category).color}20;border-left:3px solid ${cat(t.category).color}">${esc(t.name)}</div>`).join("")}${dayTasks.length>3?`<div class="more">＋${dayTasks.length-3} 項</div>`:""}</div>`;
  }
  $("calendar").innerHTML=cells;
@@ -1305,7 +1305,7 @@ function render(){
  $("daySub").textContent=pretty(selected);
  $("addDayBtn").textContent="＋ 新增當日工作";
  $("addDayBtn").onclick=()=>openModal(selected);
- const todays=tasks.filter(t=>Boolean(t.date)&&t.date===selected);
+ const todays=tasks.filter(t=>Boolean(t.date)&&t.date<=selected&&addDays(t.date,(t.duration||1)-1)>=selected);
  $("dayTasks").innerHTML=todays.length?todays.map(taskHTML).join(""):'<div class="empty">這一天還沒有安排工作。</div>';
   $("pending").innerHTML='<div class="empty">待安排工作區將由專用設定功能管理。</div>';
  $("legend").innerHTML=categories.map(c=>`<div class="legenditem"><span class="dot" style="background:${c.color}"></span>${c.name}</div>`).join("");
@@ -2462,40 +2462,20 @@ function nextWednesday(dateString){
 const LINK_KEY="po_yat_link_rules_v1";
 function linkDefaults(){return [{id:"campaign",name:"檔期連動",rows:[
  ["專案執行","專案","專案執行",-7],["專案退貨","專案","專案退貨",-2],["延檔","POP 放置","延檔",0],["偷跑","POP 放置","偷跑",7],["抽POP","POP 放置","抽POP",13],["空檔全員","POP 放置","空檔全員",14],["第一單-前","訂貨","第一單",-1],["第一單-當","訂貨","第一單",0],["第一單-後","訂貨","第一單",1]].map(([id,category,name,offset])=>({id,category,name,offset}))}]}
-function linkRules(){try{return JSON.parse(localStorage.getItem(LINK_KEY))||linkDefaults()}catch(e){return linkDefaults()}}
+function linkRules(){let gs;try{gs=JSON.parse(localStorage.getItem(LINK_KEY))||linkDefaults()}catch(e){gs=linkDefaults()}return gs.map(g=>{let rows=g.rows.map(r=>({...r,duration:r.duration||1}));const first=rows.filter(r=>r.name==='第一單');if(first.length===3&&first.every(r=>['第一單-前','第一單-當','第一單-後'].includes(r.id))){const r=first.sort((a,b)=>a.offset-b.offset)[0];rows=rows.filter(x=>!first.includes(x));rows.push({...r,duration:3});}const base=rows[0]?.offset||0;return {...g,rows:rows.map(r=>({...r,offset:r.offset-base}))}})}
 let linkDraft=[];
-function linkOpen(){linkDraft=linkRules();linkRender();$("linkBack").classList.add("show")}
-function linkAddGroup(){linkDraft.push({id:makeId(),name:"新排程",rows:[]});linkRender()}
-function linkAddRow(i){const c=categories.find(c=>c.items.length);if(!c)return;linkDraft[i].rows.push({id:makeId(),category:c.name,name:c.items[0],offset:0});linkRender()}
-function linkRender(){ $("linkList").innerHTML=linkDraft.map((g,i)=>`<details open style="border:1px solid #c9bcae;border-radius:10px;padding:10px;margin:10px 0"><summary>${esc(g.name)}</summary><label>排程名稱<input value="${esc(g.name)}" oninput="linkDraft[${i}].name=this.value"></label><p class="sub">相對天數：負數提前，正數延後，0 為同日。</p>${g.rows.map((r,j)=>`<div style="display:flex;gap:6px;align-items:center;margin:8px 0"><select style="flex:1;min-width:0" onchange="linkPick(${i},${j},this.value)">${categories.map(c=>`<optgroup label="${esc(c.name)}">${c.items.map(n=>`<option value="${esc(c.name+'||'+n)}" ${c.name===r.category&&n===r.name?'selected':''}>${esc(n)}</option>`).join('')}</optgroup>`).join('')}</select><input aria-label="相對天數" type="number" style="width:70px" value="${r.offset}" onchange="linkDraft[${i}].rows[${j}].offset=Number(this.value)"><button type="button" onclick="linkDraft[${i}].rows.splice(${j},1);linkRender()">刪除</button></div>`).join('')}<button type="button" onclick="linkAddRow(${i})">＋ 工作</button> <button type="button" onclick="if(confirm('刪除規則組？既有工作保留。')){linkDraft.splice(${i},1);linkRender()}">刪除組</button></details>`).join('')}
+function rOffset(i,j){return linkDraft[i].rows[j].offset}
+function linkOpen(){linkDraft=linkRules();linkRender();$('linkBack').classList.add('show')}
+function linkAddGroup(){linkDraft.push({id:makeId(),name:'新排程',rows:[]});linkRender()}
+function linkAddRow(i){const c=categories.find(c=>c.items.length);if(!c)return;linkDraft[i].rows.push({id:makeId(),category:c.name,name:c.items[0],offset:0,duration:1});linkRender()}
+function linkRender(){ $("linkList").innerHTML=linkDraft.map((g,i)=>`<details open style="border:1px solid #c9bcae;border-radius:10px;padding:10px;margin:10px 0"><summary>${esc(g.name)}</summary><label>排程名稱<input value="${esc(g.name)}" oninput="linkDraft[${i}].name=this.value"></label><p class="sub">第一列為參考工作，其餘設定提前／延後天數及持續天數。</p>${g.rows.map((r,j)=>`<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:8px 0"><select style="flex:1;min-width:0" onchange="linkPick(${i},${j},this.value)">${categories.map(c=>`<optgroup label="${esc(c.name)}">${c.items.map(n=>`<option value="${esc(c.name+'||'+n)}" ${c.name===r.category&&n===r.name?'selected':''}>${esc(n)}</option>`).join('')}</optgroup>`).join('')}</select><select aria-label="日期關係" onchange="linkDraft[${i}].rows[${j}].offset=(this.value==='before'?-1:this.value==='same'?0:1)*Math.max(1,Math.abs(rOffset(${i},${j})));linkRender()"><option value="before" ${r.offset<0?'selected':''}>提前</option><option value="same" ${r.offset===0?'selected':''}>當天</option><option value="after" ${r.offset>0?'selected':''}>延後</option></select><input aria-label="天數" type="number" min="0" style="width:55px" value="${Math.abs(r.offset)}" onchange="linkDraft[${i}].rows[${j}].offset=(rOffset(${i},${j})<0?-1:1)*Number(this.value)"><label>持續<input type="number" min="1" max="365" style="width:55px" value="${r.duration||1}" onchange="linkDraft[${i}].rows[${j}].duration=Number(this.value)"></label><button type="button" onclick="linkDraft[${i}].rows.splice(${j},1);linkRender()">刪除</button></div>`).join('')}<button type="button" onclick="linkAddRow(${i})">＋ 工作</button> <button type="button" onclick="if(confirm('刪除規則組？儲存時將預覽月曆異動。')){linkDraft.splice(${i},1);linkRender()}">刪除組</button></details>`).join('')}
 function linkPick(i,j,v){const [category,name]=v.split('||');Object.assign(linkDraft[i].rows[j],{category,name})}
-function linkSave(){if(linkDraft.some(g=>!g.name.trim()||g.rows.length<2||g.rows.some(r=>!Number.isInteger(r.offset)||Math.abs(r.offset)>3650)||new Set(g.rows.map(r=>r.category+'|'+r.name+'|'+r.offset)).size!==g.rows.length)){alert('每組至少兩項工作，天數須為整數，且不可重複。');return}localStorage.setItem(LINK_KEY,JSON.stringify(linkDraft));$('linkBack').classList.remove('show')}
-function isScheduleTask(t){return linkRules().some(g=>g.rows.some(r=>r.category===t.category&&r.name===t.name))}
-function syncProjectFollowups(task,previous){
- if(!task.date)return;
- const options=linkRules().flatMap(g=>g.rows.filter(r=>r.category===task.category&&r.name===task.name).map(r=>({g,r})));
- if(!options.length)return;
- let choice=options.find(o=>o.g.id===task.linkGroup&&o.r.id===task.linkRow);
- if(!choice&&options.length===1)choice=options[0];
- if(!choice){const n=prompt('選擇排程位置（輸入編號）：\n'+options.map((o,i)=>`${i+1}. ${o.g.name}／相對第 ${o.r.offset} 天`).join('\n'),'1');choice=options[Number(n)-1];if(!choice)return;}
- const {g,r}=choice, base=addDays(task.date,-r.offset);
- const expected=g.rows.map(x=>({...x,date:addDays(base,x.offset)}));
- const existing=tasks.filter(t=>t!==task&&t.seriesId&&expected.some(x=>x.category===t.category&&x.name===t.name&&x.date===t.date));
- const candidates=[...new Set(existing.map(t=>t.seriesId))];
- let group=task.seriesId;
- if(!group&&candidates.length===1&&confirm('找到同日期的既有連動排程，是否沿用？'))group=candidates[0];
- if(!group&&candidates.length>1){alert('有多組可能的既有排程，請從既有工作編輯，避免重複。');return;}
- if(previous&&previous.date===task.date&&task.seriesId)return;
- if(task.seriesId&& !confirm('是否同步調整同組未完成的工作？取消則只調整本項。')){task.manualDate=true;return;}
- if(!group&&!confirm('建立「'+g.name+'」連動排程？\n'+expected.map(x=>x.date+' '+x.name).join('\n')))return;
- group=group||task.id;
- const sameGroup=tasks.filter(t=>t!==task&&t.seriesId===group);
- const used=new Set();
- const duplicate=sameGroup.find(t=>t.category===r.category&&t.name===r.name&&t.date===task.date);
- if(duplicate&&!previous){Object.assign(duplicate,{note:task.note||duplicate.note,linkGroup:g.id,linkRow:r.id,auto:false});tasks=tasks.filter(t=>t!==task);task=duplicate;}
- Object.assign(task,{seriesId:group,linkGroup:g.id,linkRow:r.id,auto:false,manualDate:false});used.add(task.id);
- for(const x of expected){if(x.id===r.id)continue;let old=sameGroup.find(t=>!used.has(t.id)&&t.linkRow===x.id)||sameGroup.find(t=>!used.has(t.id)&&t.category===x.category&&t.name===x.name&&t.date===x.date)||sameGroup.find(t=>!used.has(t.id)&&t.id==='auto-'+group+'-'+x.id)||sameGroup.find(t=>!used.has(t.id)&&t.category===x.category&&t.name===x.name);if(old){used.add(old.id);old.linkGroup=g.id;old.linkRow=x.id;if(!old.done&&!old.manualDate&&old.auto!==false)old.date=x.date;}else tasks.push({id:makeId(),seriesId:group,linkGroup:g.id,linkRow:x.id,category:x.category,name:x.name,date:x.date,note:'連動排程',done:false,auto:true});}
-}
+const lk=t=>t.category+'|'+t.name;
+function linkPlan(gs,anchor){const found=new Map([[lk(anchor),{...anchor,duration:anchor.duration||1,sources:[]}]]);let changed=true;while(changed){changed=false;for(const g of gs){const ref=g.rows.find(r=>found.has(lk(r)));if(!ref)continue;const base=addDays(found.get(lk(ref)).date,-ref.offset);for(const r of g.rows){const k=lk(r),date=addDays(base,r.offset),prev=found.get(k);if(prev&&(prev.date!==date|| (prev.sources.length&&prev.duration!==r.duration)))throw Error('日期或持續天數衝突：'+r.name+'（'+g.name+'）');if(!prev){found.set(k,{...r,date,sources:[g.id]});changed=true}else{prev.duration=r.duration;if(!prev.sources.includes(g.id))prev.sources.push(g.id)}}}}return [...found.values()]}
+function linkApply(list,anchor,plan,group){const used=new Set([anchor.id]);for(const x of plan){let t=lk(anchor)===lk(x)?anchor:list.find(t=>!used.has(t.id)&&lk(t)===lk(x)&&t.seriesId===group&&t.date===x.date)||list.find(t=>!used.has(t.id)&&lk(t)===lk(x)&&t.seriesId===group&&t.auto&&!t.done&&!t.manualDate)||list.find(t=>!used.has(t.id)&&lk(t)===lk(x)&&t.date===x.date&&!t.seriesId);if(!t){t={id:makeId(),category:x.category,name:x.name,date:x.date,note:'連動排程',done:false,auto:true};list.push(t)}used.add(t.id);if(!t.done&&!t.manualDate&&(t.auto||t===anchor)){t.date=x.date;t.duration=x.duration}t.seriesId=group;t.linkSources=x.sources;t.linkGroup=x.sources[0];}return used}
+function linkSave(){if(linkDraft.some(g=>!g.name.trim()||g.rows.length<2||g.rows.some(r=>!Number.isInteger(r.offset)||!Number.isInteger(r.duration||1)||(r.duration||1)<1||(r.duration||1)>365)||new Set(g.rows.map(lk)).size!==g.rows.length)){alert('每組至少兩個不同工作，天數須為有效整數。');return}const gs=linkDraft.map(g=>({...g,rows:g.rows.map(r=>({...r,offset:r.offset-g.rows[0].offset,duration:r.duration||1}))}));let copy=JSON.parse(JSON.stringify(tasks)),remove=[];try{for(const group of new Set(copy.map(t=>t.seriesId).filter(Boolean))){const members=copy.filter(t=>t.seriesId===group);const anchor=members.find(t=>t.auto===false&&gs.some(g=>g.rows.some(r=>lk(r)===lk(t))))||members.find(t=>!t.auto&&gs.some(g=>g.rows.some(r=>lk(r)===lk(t))));const used=anchor?linkApply(copy,anchor,linkPlan(gs,anchor),group):new Set();for(const t of members)if(!used.has(t.id)){if(t.auto&&!t.done&&!t.manualDate)remove.push(t.id);else{delete t.seriesId;delete t.linkSources;delete t.linkGroup;}}}}catch(e){alert(e.message);return}const added=copy.filter(t=>!tasks.some(o=>o.id===t.id)).length, moved=copy.filter(t=>tasks.some(o=>o.id===t.id&&(o.date!==t.date||(o.duration||1)!==(t.duration||1)))).length;if(!confirm(`排程異動預覽：新增 ${added} 筆，調整 ${moved} 筆，解除連動 ${remove.length} 筆。確定儲存？`))return;const del=remove.length&&confirm('同步移除已解除連動的未完成自動工作？取消則保留工作。');copy=copy.filter(t=>!del||!remove.includes(t.id));for(const t of copy)if(remove.includes(t.id)){delete t.seriesId;delete t.linkGroup;delete t.linkSources;t.auto=false;}localStorage.setItem(LINK_KEY,JSON.stringify(gs));tasks=copy;save();$('linkBack').classList.remove('show')}
+function isScheduleTask(t){return linkRules().some(g=>g.rows.some(r=>lk(r)===lk(t)))}
+function syncProjectFollowups(task,previous){if(!task.date||!isScheduleTask(task))return;if(previous&&previous.date===task.date)return;let plan;try{plan=linkPlan(linkRules(),task)}catch(e){alert(e.message);return}const candidates=[...new Set(tasks.filter(t=>t!==task&&t.seriesId&&plan.some(x=>lk(x)===lk(t)&&x.date===t.date)).map(t=>t.seriesId))];if(candidates.length>1&&!task.seriesId){alert('找到多組既有排程，請編輯既有工作。');return}if(!confirm('同步連動工作？\n'+plan.map(x=>x.date+' '+x.name+'（'+x.duration+'天）').join('\n'))){task.manualDate=true;return}const group=task.seriesId||candidates[0]||task.id;const duplicate=tasks.find(t=>t!==task&&lk(t)===lk(task)&&t.date===task.date&&t.seriesId===group);if(duplicate&&!previous){tasks=tasks.filter(t=>t!==task);task=duplicate}task.auto=false;task.manualDate=false;linkApply(tasks,task,plan,group)}
 $("category").addEventListener("change",updateSpecialFields);
 $("taskName").addEventListener("input",updateSpecialFields);
 $("planImages").addEventListener("change",e=>{newImageFiles=[...newImageFiles,...Array.from(e.target.files||[])];renderImagePreview();});
@@ -2525,7 +2505,7 @@ $("prev").onclick=()=>{view=new Date(view.getFullYear(),view.getMonth()-1,1);ren
 $("next").onclick=()=>{view=new Date(view.getFullYear(),view.getMonth()+1,1);render()};
 $("todayBtn").onclick=()=>{now=new Date();view=new Date(now.getFullYear(),now.getMonth(),1);selected=iso(now);render()};
 window.toggleTask=id=>{const t=tasks.find(x=>x.id===id);t.done=!t.done;save()};
-window.removeTask=id=>{if(confirm("確定刪除這項工作？\n這是檔期連動工作時，會一併刪除同組排程。")){const target=tasks.find(t=>t.id===id);const groupId=target&&(target.seriesId||target.id);tasks=tasks.filter(t=>t.id!==id&&(!groupId||t.seriesId!==groupId)&&t.id!==groupId);save()}};
+window.removeTask=id=>{if(confirm('確定只刪除這項工作？其他連動工作保留。')){tasks=tasks.filter(t=>t.id!==id);save()}};
 window.editTask=id=>{const t=tasks.find(x=>x.id===id);openModal(null,t)};
 window.schedule=id=>{const t=tasks.find(x=>x.id===id);const d=prompt("請輸入預定日期（YYYY-MM-DD）",selected);if(d&&/^\d{4}-\d{2}-\d{2}$/.test(d)){t.date=d;selected=d;view=new Date(+d.slice(0,4),+d.slice(5,7)-1,1);save()}};
 $("suggestions").innerHTML=categories.flatMap(c=>c.items).map(x=>`<option value="${esc(x)}">`).join("");
