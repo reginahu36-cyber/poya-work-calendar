@@ -2186,14 +2186,20 @@ $("rentImportCommit").onclick=()=>{
  const missingRecords=oldTarget.filter(r=>r.status!=='已取消'&&!newKeys.has(rentIdentity(r))).map(r=>({...r,reviewStatus:'新版未列入／待確認'}));
  const mergedRows=[...preserved,...newRows.map(r=>({...r,status:r.status||'待確認'}))];
  const version={id:makeId(),version:(c.versions?.length||0)+1,sourceName:rentPendingImport.sourceName,fileDate:rentPendingImport.fileDate,importedAt:new Date().toLocaleString('zh-TW'),records:mergedRows,missingRecords,diff:{added,changed,missing,storeChanges},final:false};
- c.versions.push(version);rentRegisterStores(version.records);saveRent();
- // 匯入完成後留在承租管理畫面，立即刷新版本與清單，不要求使用者離開再重新進入。
+ const commit=$("rentImportCommit"),cancel=$("rentImportCancel");
+ commit.disabled=true;cancel.disabled=true;commit.textContent='儲存中…';
+ const previousStores={...rentDB.stores};
+ try{c.versions.push(version);rentRegisterStores(version.records);saveRent();}
+ catch(err){c.versions=c.versions.filter(v=>v.id!==version.id);rentDB.stores=previousStores;commit.disabled=false;cancel.disabled=false;commit.textContent='確認匯入並建立版本';$("rentImportStatus").textContent='儲存失敗，尚未建立版本：'+err.message;return;}
  rentPendingImport=null;
  $("rentImportBack").classList.remove('show');
+ $("rentImportFile").value='';$("rentImportPreview").innerHTML='';
  $("rentPeriodBack").classList.add('show');
- renderRentManager();
- requestAnimationFrame(()=>{renderRentRecords();const list=$("rentRecordList");if(list)list.scrollTop=0;});
- alert(`匯入完成，已建立 V${version.version}。新增 ${added} 筆、修改 ${changed} 筆、上一版有 ${missing} 筆未出現在新版；未列入的資料不會自動取消。`);
+ commit.textContent='確認匯入並建立版本';cancel.disabled=false;
+ requestAnimationFrame(()=>{
+  try{renderRentManager();}catch(err){console.error(err);alert('V'+version.version+' 已儲存，但畫面更新失敗。請重新進入承租管理，不必再次匯入。');return;}
+  const notice=document.createElement('div');notice.setAttribute('role','status');notice.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:9999;background:#237447;color:white;padding:12px 18px;border-radius:12px;max-width:90vw;box-shadow:0 3px 16px #0003';notice.textContent=`匯入完成，已建立 V${version.version}（${version.records.length} 筆）`;document.body.appendChild(notice);setTimeout(()=>notice.remove(),4500);
+ });
 };
 function rentOpenManual(){if(!rentCampaign()){alert('請先建立檔期。');return;}rentEditingId='';$("rentFormTitle").textContent='手動新增承租';$("rentDept").innerHTML=rentDeptOptions();$("rentFormCampaign").value=rentCampaign().period;['rentVendorCode','rentVendorName','rentItemCategory','rentItemName','rentCampaignNote','rentExpiry','rentDelivery','rentFee','rentShelfName'].forEach(id=>$(id).value='');$("rentWarehouse").value='';$("rentPhotos").value='';$("rentPhotoPreview").innerHTML='';const stores=rentStoreNames().filter(n=>rentDB.stores[n]?.active!==false);$('rentManualStoreList').innerHTML=stores.length?stores.map(name=>`<div class="co-toolbar" style="justify-content:space-between;border-bottom:1px solid var(--line);padding:6px 0"><div><strong>${esc(name)}</strong><div class="co-small">${esc(rentDB.stores[name]?.storeType||'店型未設定')}</div></div><select data-manual-store="${esc(name)}" style="min-width:120px;padding:7px"><option>待確認</option><option>承租</option><option>不承租</option></select></div>`).join(''):'<div class="empty">尚未匯入分店欄位。可先建立承租項目，取得部門版 Excel 後再設定分店。</div>';$('rentFormBack').classList.add('show');}
 $("rentOpenManual").onclick=rentOpenManual;
