@@ -241,6 +241,7 @@ button.primary{background:var(--accent);border-color:var(--accent);color:white}b
               <span><strong>工作分類</strong><small>管理分類、工作項目與首頁顯示顏色</small></span>
               <span class="settings-status">管理</span>
             </button>
+            <button type="button" class="settings-tile" onclick="linkOpen()"><span class="settings-icon">↔</span><span><strong>連動排程管理</strong><small>跨分類工作日期與前後關係</small></span><span class="settings-status">管理</span></button>
           </div>
         </div>
         <div class="settings-section">
@@ -479,6 +480,7 @@ button.primary{background:var(--accent);border-color:var(--accent);color:white}b
 </style>
 
 
+<div class="modalback" id="linkBack" style="z-index:55"><section class="modal" style="max-height:92vh;overflow:auto;width:min(650px,100%)"><h2>連動排程管理</h2><p class="sub">任一工作可作為日期起點。修改規則不會立即改動既有工作。</p><div id="linkList"></div><button type="button" onclick="linkAddGroup()">＋ 新增排程組</button> <button type="button" onclick="linkSave()" class="primary">儲存</button> <button type="button" onclick="$('linkBack').classList.remove('show')">取消</button></section></div>
 <div class="modalback" id="workCategorySettingsBack" style="z-index:45">
  <section class="modal" style="width:min(760px,100%);max-height:92vh;overflow:auto">
   <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
@@ -1003,7 +1005,7 @@ const DEFAULT_WORK_CATEGORIES=[
  {name:"MQC",color:"#4386d8",items:["平面圖","貨架商品檢查","MQC退貨"]},
  {name:"專案",color:"#8a68c9",items:["專案執行","專案退貨"]},
  {name:"換檔",color:"#e3a13d",items:["檔頭"]},
- {name:"POP 放置",color:"#20a18b",items:["多點"]},
+ {name:"POP 放置",color:"#20a18b",items:["延檔","偷跑","多點","抽POP","空檔全員"]},
  {name:"訂貨",color:"#d47b32",items:["OPL","第一單"]},
  {name:"清潔貨架",color:"#4a9b75",items:["貨架清潔"]},
  {name:"承租",color:"#d66c91",items:["承租相關事項"]},
@@ -1019,6 +1021,12 @@ function loadWorkCategories(){
  return DEFAULT_WORK_CATEGORIES.map(c=>({...c,items:c.items.slice()}));
 }
 let categories=loadWorkCategories();
+const popNames=["延檔","偷跑","抽POP","空檔全員"];
+if(!localStorage.getItem("po_yat_link_migrated_v1")){
+ const pop=categories.find(c=>c.name==="POP 放置"), co=categories.find(c=>c.name==="換檔");
+ if(pop){pop.items=Array.from(new Set([...pop.items.map(n=>n==="空檔"?"空檔全員":n),...popNames]));if(co)co.items=co.items.filter(n=>!popNames.includes(n));persistWorkCategories();}
+ localStorage.setItem("po_yat_link_migrated_v1","1");
+}
 function persistWorkCategories(){localStorage.setItem(WORK_CATEGORY_KEY,JSON.stringify(categories));}
 
 const pad=n=>String(n).padStart(2,"0");
@@ -1259,18 +1267,10 @@ tasks.forEach(t=>{
  if(t.auto&&t.name==="檔期第一單")t.name="第一單";
  if(t.name==="空檔")t.name="空檔全員";
  if(t.name==="抽pop")t.name="抽POP";
- if(["延檔","偷跑","空檔全員","抽POP"].includes(t.name))t.category="換檔";
+ if(popNames.includes(t.name)&&t.category==="換檔")t.category="POP 放置";
  if(t.name==="專案退貨")t.category="專案";
 });
 // 舊版抽POP補建：以檔期及工作名稱判斷，不以大小寫不同的 ID 判斷。
-const emptyTasks=tasks.filter(t=>t.auto&&t.name==="空檔全員"&&t.seriesId);
-emptyTasks.forEach(t=>{
- const pullDate=addDays(t.date,-1), pullId="auto-"+t.seriesId+"-抽POP";
- const matches=tasks.filter(x=>x.seriesId===t.seriesId&&x.category==="換檔"&&x.name==="抽POP");
- const legacy=matches.find(x=>x.id==="auto-"+t.seriesId+"-抽pop"&&x.auto&&x.note==="空檔全員前一天自動預設"&&!x.done);
- if(legacy&&matches.some(x=>x!==legacy&&x.date===legacy.date)) tasks=tasks.filter(x=>x!==legacy);
- if(!matches.length) tasks.push({id:pullId,seriesId:t.seriesId,category:"換檔",name:"抽POP",date:pullDate,note:"空檔全員前一天自動預設",done:false,auto:true});
-});
 localStorage.setItem("po_yat_tasks_v1",JSON.stringify(tasks));
 const pretty=s=>{const [y,m,d]=s.split("-").map(Number);return `${y}/${m}/${d}`};
 const cat=n=>categories.find(c=>c.name===n)||{name:n,color:"#999999",items:[]};
@@ -2459,58 +2459,42 @@ function nextWednesday(dateString){
  if(delta===0)delta=7;
  date.setDate(date.getDate()+delta);return iso(date);
 }
-function isScheduleTask(task){
- const n=(task.name||"").trim();
- return (task.category==="專案"&&(n==="專案執行"||n==="專案退貨")) ||
-        (task.category==="換檔"&&["延檔","偷跑","空檔全員","抽POP"].includes(n)) ||
-        (task.category==="訂貨"&&n==="第一單");
-}
-function syncProjectFollowups(task){
- const groupId=task.seriesId||task.id;
- const name=task.name.trim(), date=task.date;
- // 同一檔期重算時，先移除舊的自動項目，保留本次正在編輯的起點
- tasks=tasks.filter(t=>t.id!==task.id&&t.seriesId!==groupId);
- task.seriesId=groupId;task.auto=false;tasks.push(task);
- if(!isScheduleTask(task)||!date)return;
-
- // 一律先換算出「延檔日」：專案執行固定在延檔前 7 天
- let delayDate=date;
- if(task.category==="專案"&&name==="專案執行") delayDate=addDays(date,7);
- else if(task.category==="專案"&&name==="專案退貨") delayDate=addDays(date,2);
- else if(task.category==="換檔"&&name==="偷跑") delayDate=addDays(date,-7);
- else if(task.category==="換檔"&&name==="空檔全員") delayDate=addDays(date,-14);
- else if(task.category==="換檔"&&name==="抽POP") delayDate=addDays(date,-13);
- else if(task.category==="訂貨"&&name==="第一單"){
-  const [yy,mm,dd]=date.split("-").map(Number), dow=new Date(yy,mm-1,dd).getDay();
-  // 第一單分別在延檔前一天（星期二）、當天（星期三）、隔天（星期四）
-  if(dow===2)delayDate=addDays(date,1);
-  else if(dow===3)delayDate=date;
-  else if(dow===4)delayDate=addDays(date,-1);
-  else { alert("第一單日期需為星期二、三或四，才能反推延檔日期。"); tasks=tasks.filter(t=>t.id!==task.id); return; }
- }
- // 專案退貨固定為專案執行日後的下一個星期一
- const projectDate=addDays(delayDate,-7);
- const [py,pm,pd]=projectDate.split("-").map(Number);
- const monday=new Date(py,pm-1,pd);
- let mondayDelta=(1-monday.getDay()+7)%7;if(mondayDelta===0)mondayDelta=7;
- monday.setDate(monday.getDate()+mondayDelta);
- const emptyDate=addDays(delayDate,14);
- const expected=[
-  {key:"專案執行",category:"專案",name:"專案執行",date:projectDate,note:"延檔前 7 天自動排程"},
-  {key:"專案退貨",category:"專案",name:"專案退貨",date:iso(monday),note:"專案執行日後的下一個星期一"},
-  {key:"延檔",category:"換檔",name:"延檔",date:delayDate,note:"檔期連動自動排程"},
-  {key:"偷跑",category:"換檔",name:"偷跑",date:addDays(delayDate,7),note:"延檔後 7 天自動排程"},
-  {key:"空檔全員",category:"換檔",name:"空檔全員",date:emptyDate,note:"延檔後 14 天自動排程"},
-  {key:"抽POP",category:"換檔",name:"抽POP",date:addDays(emptyDate,-1),note:"空檔全員前一天自動排程"},
-  {key:"第一單-前",category:"訂貨",name:"第一單",date:addDays(delayDate,-1),note:"延檔前一天自動排程"},
-  {key:"第一單-當",category:"訂貨",name:"第一單",date:delayDate,note:"延檔當天自動排程"},
-  {key:"第一單-後",category:"訂貨",name:"第一單",date:addDays(delayDate,1),note:"延檔隔天自動排程"}
- ];
- const same=(a,b)=>a.category===b.category&&a.name===b.name&&a.date===b.date;
- expected.forEach(item=>{
-  if(same(task,item))return;
-  tasks.push({id:"auto-"+groupId+"-"+item.key,seriesId:groupId,category:item.category,name:item.name,date:item.date,note:item.note,done:false,auto:true});
- });
+const LINK_KEY="po_yat_link_rules_v1";
+function linkDefaults(){return [{id:"campaign",name:"檔期連動",rows:[
+ ["專案執行","專案","專案執行",-7],["專案退貨","專案","專案退貨",-2],["延檔","POP 放置","延檔",0],["偷跑","POP 放置","偷跑",7],["抽POP","POP 放置","抽POP",13],["空檔全員","POP 放置","空檔全員",14],["第一單-前","訂貨","第一單",-1],["第一單-當","訂貨","第一單",0],["第一單-後","訂貨","第一單",1]].map(([id,category,name,offset])=>({id,category,name,offset}))}]}
+function linkRules(){try{return JSON.parse(localStorage.getItem(LINK_KEY))||linkDefaults()}catch(e){return linkDefaults()}}
+let linkDraft=[];
+function linkOpen(){linkDraft=linkRules();linkRender();$("linkBack").classList.add("show")}
+function linkAddGroup(){linkDraft.push({id:makeId(),name:"新排程",rows:[]});linkRender()}
+function linkAddRow(i){const c=categories.find(c=>c.items.length);if(!c)return;linkDraft[i].rows.push({id:makeId(),category:c.name,name:c.items[0],offset:0});linkRender()}
+function linkRender(){ $("linkList").innerHTML=linkDraft.map((g,i)=>`<details open style="border:1px solid #c9bcae;border-radius:10px;padding:10px;margin:10px 0"><summary>${esc(g.name)}</summary><label>排程名稱<input value="${esc(g.name)}" oninput="linkDraft[${i}].name=this.value"></label><p class="sub">相對天數：負數提前，正數延後，0 為同日。</p>${g.rows.map((r,j)=>`<div style="display:flex;gap:6px;align-items:center;margin:8px 0"><select style="flex:1;min-width:0" onchange="linkPick(${i},${j},this.value)">${categories.map(c=>`<optgroup label="${esc(c.name)}">${c.items.map(n=>`<option value="${esc(c.name+'||'+n)}" ${c.name===r.category&&n===r.name?'selected':''}>${esc(n)}</option>`).join('')}</optgroup>`).join('')}</select><input aria-label="相對天數" type="number" style="width:70px" value="${r.offset}" onchange="linkDraft[${i}].rows[${j}].offset=Number(this.value)"><button type="button" onclick="linkDraft[${i}].rows.splice(${j},1);linkRender()">刪除</button></div>`).join('')}<button type="button" onclick="linkAddRow(${i})">＋ 工作</button> <button type="button" onclick="if(confirm('刪除規則組？既有工作保留。')){linkDraft.splice(${i},1);linkRender()}">刪除組</button></details>`).join('')}
+function linkPick(i,j,v){const [category,name]=v.split('||');Object.assign(linkDraft[i].rows[j],{category,name})}
+function linkSave(){if(linkDraft.some(g=>!g.name.trim()||g.rows.length<2||g.rows.some(r=>!Number.isInteger(r.offset)||Math.abs(r.offset)>3650)||new Set(g.rows.map(r=>r.category+'|'+r.name+'|'+r.offset)).size!==g.rows.length)){alert('每組至少兩項工作，天數須為整數，且不可重複。');return}localStorage.setItem(LINK_KEY,JSON.stringify(linkDraft));$('linkBack').classList.remove('show')}
+function isScheduleTask(t){return linkRules().some(g=>g.rows.some(r=>r.category===t.category&&r.name===t.name))}
+function syncProjectFollowups(task,previous){
+ if(!task.date)return;
+ const options=linkRules().flatMap(g=>g.rows.filter(r=>r.category===task.category&&r.name===task.name).map(r=>({g,r})));
+ if(!options.length)return;
+ let choice=options.find(o=>o.g.id===task.linkGroup&&o.r.id===task.linkRow);
+ if(!choice&&options.length===1)choice=options[0];
+ if(!choice){const n=prompt('選擇排程位置（輸入編號）：\n'+options.map((o,i)=>`${i+1}. ${o.g.name}／相對第 ${o.r.offset} 天`).join('\n'),'1');choice=options[Number(n)-1];if(!choice)return;}
+ const {g,r}=choice, base=addDays(task.date,-r.offset);
+ const expected=g.rows.map(x=>({...x,date:addDays(base,x.offset)}));
+ const existing=tasks.filter(t=>t!==task&&t.seriesId&&expected.some(x=>x.category===t.category&&x.name===t.name&&x.date===t.date));
+ const candidates=[...new Set(existing.map(t=>t.seriesId))];
+ let group=task.seriesId;
+ if(!group&&candidates.length===1&&confirm('找到同日期的既有連動排程，是否沿用？'))group=candidates[0];
+ if(!group&&candidates.length>1){alert('有多組可能的既有排程，請從既有工作編輯，避免重複。');return;}
+ if(previous&&previous.date===task.date&&task.seriesId)return;
+ if(task.seriesId&& !confirm('是否同步調整同組未完成的工作？取消則只調整本項。')){task.manualDate=true;return;}
+ if(!group&&!confirm('建立「'+g.name+'」連動排程？\n'+expected.map(x=>x.date+' '+x.name).join('\n')))return;
+ group=group||task.id;
+ const sameGroup=tasks.filter(t=>t!==task&&t.seriesId===group);
+ const used=new Set();
+ const duplicate=sameGroup.find(t=>t.category===r.category&&t.name===r.name&&t.date===task.date);
+ if(duplicate&&!previous){Object.assign(duplicate,{note:task.note||duplicate.note,linkGroup:g.id,linkRow:r.id,auto:false});tasks=tasks.filter(t=>t!==task);task=duplicate;}
+ Object.assign(task,{seriesId:group,linkGroup:g.id,linkRow:r.id,auto:false,manualDate:false});used.add(task.id);
+ for(const x of expected){if(x.id===r.id)continue;let old=sameGroup.find(t=>!used.has(t.id)&&t.linkRow===x.id)||sameGroup.find(t=>!used.has(t.id)&&t.category===x.category&&t.name===x.name&&t.date===x.date)||sameGroup.find(t=>!used.has(t.id)&&t.id==='auto-'+group+'-'+x.id)||sameGroup.find(t=>!used.has(t.id)&&t.category===x.category&&t.name===x.name);if(old){used.add(old.id);old.linkGroup=g.id;old.linkRow=x.id;if(!old.done&&!old.manualDate&&old.auto!==false)old.date=x.date;}else tasks.push({id:makeId(),seriesId:group,linkGroup:g.id,linkRow:x.id,category:x.category,name:x.name,date:x.date,note:'連動排程',done:false,auto:true});}
 }
 $("category").addEventListener("change",updateSpecialFields);
 $("taskName").addEventListener("input",updateSpecialFields);
@@ -2529,10 +2513,10 @@ $("taskForm").addEventListener("submit",async e=>{
   catch(err){alert("有圖片讀取失敗，請重新選取。");return;}
   data.images=editingImages;
  }
- let project;
+ let project; const previous=editing?{...tasks.find(x=>x.id===editing)}:null;
  if(editing){project=tasks.find(x=>x.id===editing);Object.assign(project,data)}
  else{project={id:makeId(),...data,done:false};tasks.push(project)}
- syncProjectFollowups(project);
+ syncProjectFollowups(project,previous);
  if(data.date)selected=data.date;closeModal();save();
 });
 $("cancelBtn").onclick=closeModal;$("modalBack").addEventListener("click",e=>{if(e.target===$("modalBack"))closeModal()});
@@ -2651,7 +2635,7 @@ function switchMobilePage(target){
 <div class="modalback" id="backupBack" style="z-index:90"><section class="modal" style="max-height:90vh;overflow:auto;width:min(620px,100%)"><h2>備份與還原</h2><p id="backupSpace"></p><p id="backupLast"></p><h3>資料備份</h3><button onclick="backupExport(true)">完整備份</button><h3>選擇備份／還原項目</h3><div id="backupGroups"></div><button onclick="backupExport(false)">選擇項目備份</button><hr><h3>資料還原</h3><input type="file" id="backupFile" accept=".json,application/json"><p id="backupInfo"></p><label>還原方式 <select id="backupMode"><option value="merge">合併（現有資料優先）</option><option value="replace">覆蓋所選項目</option></select></label><p>還原前會先下載目前完整備份，請確認下載成功。</p><button onclick="backupPrepare()">下載還原前備份</button><button id="backupApply" disabled onclick="backupRestore()">確認還原</button><hr><h3>備份與還原紀錄</h3><div id="backupHistory"></div><button onclick="document.getElementById('backupBack').classList.remove('show')">關閉</button></section></div><script>
 (()=>{
 const E=id=>document.getElementById(id), H='po_yat_backup_history_v1';
-const groups={ '共用部門':['departments_v1'],'共用分店':['stores_v1'],'工作分類':['work_categories_v1','work_category_routes_v1'],'月曆及待安排工作':['tasks_v1'],'MQC':['shelf_config_v1','inspections_v1'],'專案':['project_progress_v1'],'換檔':['changeover_v1','changeover_items_v1'],'訂貨':['opl_v1','first_order_v1','barcode_name_map_v1','first_product_master_v1','first_product_catalog_v1','first_campaigns_v1'],'承租':['rent_management_v1','rent_items_v2','rent_my_store_v1','rent_my_store_status_v1'],'工作照片':[],'承租照片':[],'外觀設定':['appearance_v1'],'其他系統設定':[]};
+const groups={ '共用部門':['departments_v1'],'共用分店':['stores_v1'],'工作分類':['work_categories_v1','work_category_routes_v1'],'連動排程':['link_rules_v1','link_migrated_v1'],'月曆及待安排工作':['tasks_v1'],'MQC':['shelf_config_v1','inspections_v1'],'專案':['project_progress_v1'],'換檔':['changeover_v1','changeover_items_v1'],'訂貨':['opl_v1','first_order_v1','barcode_name_map_v1','first_product_master_v1','first_product_catalog_v1','first_campaigns_v1'],'承租':['rent_management_v1','rent_items_v2','rent_my_store_v1','rent_my_store_status_v1'],'工作照片':[],'承租照片':[],'外觀設定':['appearance_v1'],'其他系統設定':[]};
 const dbs={'工作照片':'po_yat_photo_db_v1','承租照片':'po_yat_rent_photo_db_v1'}; const known=Object.values(groups).flat().map(k=>'po_yat_'+k); let incoming=null, safety=null, restoring=false;
 const keys=()=>Object.keys(localStorage).filter(k=>k.startsWith('po_yat_')&&k!==H); const groupKeys=g=>g==='其他系統設定'?keys().filter(k=>!known.includes(k)):groups[g].map(k=>'po_yat_'+k);
 const chosen=()=>Array.from(E('backupGroups').querySelectorAll('input:checked')).map(x=>x.value);
