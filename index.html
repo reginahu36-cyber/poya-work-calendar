@@ -1261,12 +1261,14 @@ tasks.forEach(t=>{
  if(["延檔","偷跑","空檔全員","抽POP"].includes(t.name))t.category="換檔";
  if(t.name==="專案退貨")t.category="專案";
 });
+// 舊版抽POP補建：以檔期及工作名稱判斷，不以大小寫不同的 ID 判斷。
 const emptyTasks=tasks.filter(t=>t.auto&&t.name==="空檔全員"&&t.seriesId);
 emptyTasks.forEach(t=>{
- const pullDate=addDays(t.date,-1), pullId="auto-"+t.seriesId+"-抽pop";
- if(!tasks.some(x=>x.id===pullId)){
-  tasks.push({id:pullId,seriesId:t.seriesId,category:"換檔",name:"抽POP",date:pullDate,note:"空檔全員前一天自動預設",done:false,auto:true});
- }
+ const pullDate=addDays(t.date,-1), pullId="auto-"+t.seriesId+"-抽POP";
+ const matches=tasks.filter(x=>x.seriesId===t.seriesId&&x.category==="換檔"&&x.name==="抽POP");
+ const legacy=matches.find(x=>x.id==="auto-"+t.seriesId+"-抽pop"&&x.auto&&x.note==="空檔全員前一天自動預設"&&!x.done);
+ if(legacy&&matches.some(x=>x!==legacy&&x.date===legacy.date)) tasks=tasks.filter(x=>x!==legacy);
+ if(!matches.length) tasks.push({id:pullId,seriesId:t.seriesId,category:"換檔",name:"抽POP",date:pullDate,note:"空檔全員前一天自動預設",done:false,auto:true});
 });
 localStorage.setItem("po_yat_tasks_v1",JSON.stringify(tasks));
 const pretty=s=>{const [y,m,d]=s.split("-").map(Number);return `${y}/${m}/${d}`};
