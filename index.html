@@ -667,6 +667,7 @@ button.primary{background:var(--accent);border-color:var(--accent);color:white}b
   <div id="rentCampaignSummary"></div>
   <h3 style="margin:18px 0 8px">版本紀錄</h3>
   <div id="rentVersionList"></div>
+  <button type="button" style="width:100%;margin-top:12px" onclick="rentOpenCompare()">檔期差異核對</button>
   <h3 style="margin:18px 0 8px">承租項目</h3>
   <div class="co-record" style="margin-bottom:10px;background:#faf9ff;border-color:#ded9f7">
    <label class="co-small" for="rentMyStoreSelect">我的管理分店（只需設定一次）</label>
@@ -2070,6 +2071,34 @@ function rentCurrentVersion(c=rentCampaign(),draft=false){
  const chosen=[...groups.values()].map(vs=>draft?vs.at(-1):(vs.findLast(v=>v.final)||vs.at(-1)));
  return {records:chosen.flatMap(v=>v.records),final:chosen.every(v=>v.final),version:Math.max(...chosen.map(v=>v.version)),missingRecords:[]};
 }
+
+function rentCompareKey(r){return JSON.stringify([rentDepartment(r),r.vendorCode||r.vendorName,r.itemName].map(x=>String(x||'').trim().toLowerCase()));}
+function rentCompareRows(oldV,newV,store,start){
+ const marked=r=>String(rentStoreRaw(r,store)).trim()!=='';
+ const down=r=>getMyStoreStatus(r)==='下架'||['下架','已取消','已結案'].includes(r.status);
+ const fields=r=>JSON.stringify([r.itemCategory,r.shelfName,r.expiry,r.delivery,r.warehouse,r.fee,rentStoreRaw(r,store)].map(x=>String(x||'').trim()));
+ const a=oldV.records.filter(marked),b=newV.records.filter(marked),out=[];
+ const keys=new Set([...a,...b].map(rentCompareKey));
+ for(const k of keys){const aa=a.filter(r=>rentCompareKey(r)===k),bb=b.filter(r=>rentCompareKey(r)===k);if(aa.length>1||bb.length>1){out.push({kind:'承租異動',r:bb[0]||aa[0],reason:'同名項目有多筆，需人工核對'});continue;}
+ const o=aa[0],n=bb[0];if(o&&down(o)&&!n)continue;
+ if(n&&!down(n)&&(!o||down(o))){out.push({kind:'待新增',r:n,reason:'新檔列入本店／恢復承租'});continue;}
+ if(o&&!down(o)&&(!n||down(n))){out.push({kind:'待下架',r:o,reason:n?'新檔標記下架':newV.records.some(r=>rentCompareKey(r)===k)?'取消本店承租':'新檔未列入',done:false});continue;}
+ if(o&&n&&down(n))continue;
+ if(o&&n&&!down(n)){const expired=n.expiry&&n.expiry<start;out.push({kind:expired?'待下架':fields(o)!==fields(n)?'承租異動':'持續承租',r:expired?n:n,reason:expired?'新檔到期日早於檔期開始':fields(o)!==fields(n)?'分店標記、期限或其他欄位異動':'資料一致'});}
+ }
+ return out;
+}
+window.rentOpenCompare=()=>{
+ if(!rentMyStore){alert('請先選擇管理分店');return;}
+ const periods=rentDB.campaigns.filter(c=>/^\d{6}$/.test(c.period)).sort((a,b)=>a.period.localeCompare(b.period));if(periods.length<2){alert('至少需要兩個檔期');return;}
+ const dialog=document.createElement('dialog');dialog.style.cssText='width: min(92vw,650px);max-height:85vh;overflow:auto;border:1px solid var(--line);border-radius:18px;padding:16px;background:var(--card,#fff);color:inherit';
+ const opts=periods.map(c=>`<option value="${esc(c.period)}">${esc(c.period)}</option>`).join('');
+ dialog.innerHTML=`<h2>檔期差異核對</h2><p>管理分店：${esc(rentMyStore)}</p><label>上一檔期</label><select id="cmpOld" style="width:100%">${opts}</select><label>新檔期</label><select id="cmpNew" style="width:100%">${opts}</select><label>部門</label><select id="cmpDept" style="width:100%"></select><p class="co-small">使用上一檔正式版與新檔最新版本核對；未確認版本僅供預覽。未匯入 Excel 的部門不判定下架。</p><div id="cmpResult"></div><button id="cmpClose" style="width:100%">關閉</button>`;
+ document.body.append(dialog);const q=id=>dialog.querySelector('#'+id);q('cmpNew').value=rentCampaign()?.period||periods.at(-1).period;if(q('cmpNew').value===periods[0].period)q('cmpNew').value=periods.at(-1).period;q('cmpOld').value=periods.filter(c=>c.period<q('cmpNew').value).at(-1)?.period||periods[0].period;
+ function render(reset=false){const a=periods.find(c=>c.period===q('cmpOld').value),b=periods.find(c=>c.period===q('cmpNew').value);const ds=[...new Set([...a.versions,...b.versions].map(v=>v.department))].sort();if(reset)q('cmpDept').innerHTML='<option value="all">全部部門</option>'+ds.map(d=>`<option>${esc(d)}</option>`).join('');if(a.period>=b.period){q('cmpResult').textContent='新檔期必須晚於上一檔期';return;}const rows=[],notes=[];for(const d of ds.filter(d=>q('cmpDept').value==='all'||q('cmpDept').value===d)){const ov=a.versions.findLast(v=>v.department===d&&v.final),nv=b.versions.filter(v=>v.department===d).at(-1);if(!ov||!nv||!b.versions.some(v=>v.department===d&&/\.xlsx?$/i.test(v.sourceName||''))){notes.push(d+'：尚未核對（缺正式來源或新檔 Excel）');continue;}if(!nv.final)notes.push(d+'：新檔待確認，結果僅供預覽');rows.push(...rentCompareRows(ov,nv,rentMyStore,b.period.slice(0,4)+'-'+b.period.slice(4)+'-01').map(x=>({...x,final:nv.final})));}q('cmpResult').innerHTML=notes.map(n=>`<p class="co-small">${esc(n)}</p>`).join('')+['待下架','待新增','承租異動','持續承租'].map(kind=>{const list=rows.filter(x=>x.kind===kind);return `<details class="co-record" ${kind==='待下架'?'open':''}><summary><strong>${kind}（${list.length}）</strong></summary>${list.map(x=>`<div class="co-record"><strong>${esc(x.r.vendorName)}｜${esc(x.r.itemName)}</strong><div class="co-small">${esc(x.r.department)}｜${esc(x.reason)}｜到期：${esc(x.r.expiry||'未設定')}</div>${kind==='待下架'&&x.final?`<button data-cmp-down="${rows.indexOf(x)}">確認下架</button>`:''}</div>`).join('')}</details>`}).join('');q('cmpResult').querySelectorAll('[data-cmp-down]').forEach(btn=>btn.onclick=()=>{const x=rows[Number(btn.dataset.cmpDown)],id=x.r.id;if(!confirm('確認本店已實際下架？'))return;const backup=structuredClone(rentMyStatus);rentMyStatus[id]??={};const entry=structuredClone(rentStatusEntry(id)||{status:'待確認',history:[]});entry.history??=[];entry.history.push({from:entry.status,to:'下架',updatedAt:new Date().toLocaleString('zh-TW')});entry.status='下架';rentMyStatus[id][rentMyStore]=entry;if(!saveRentMyStatus()){rentMyStatus=backup;return;}render();renderRentRecords();});}
+ q('cmpOld').onchange=q('cmpNew').onchange=()=>render(true);q('cmpDept').onchange=()=>render();q('cmpClose').onclick=()=>dialog.close();dialog.onclose=()=>dialog.remove();render(true);dialog.showModal();
+};
+
 function rentNextVersion(c,d){return Math.max(0,...c.versions.filter(v=>v.department===d).map(v=>v.version))+1;}
 function rentDraftFor(c,id){const d=rentDepartment(rentCurrentVersion(c).records.find(r=>r.id===id)||{});return c.versions.filter(v=>v.department===d&&v.records.some(r=>r.id===id)).at(-1);}
 function rentDeptOptions(){const all=[...new Set([...DEPARTMENTS,...rentDB.campaigns.flatMap(c=>(c.versions||[]).flatMap(v=>(v.records||[]).map(r=>r.department).filter(Boolean)))])];return '<option value="">請選擇部門</option>'+all.map(d=>`<option value="${esc(d)}">${esc(d)}</option>`).join("");}
