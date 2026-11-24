@@ -682,11 +682,11 @@ button.primary{background:var(--accent);border-color:var(--accent);color:white}b
   <div class="modalactions"><button type="button" id="rentPeriodClose">關閉</button></div>
  </section>
 </div>
-<div class="modalback" id="rentImportBack">
+<div class="modalback" id="rentImportBack" style="z-index:80">
  <section class="modal changeover-modal">
   <h2>匯入承租 Excel</h2>
   <div class="sub">同一檔期的每次匯入都會建立新版本，不會覆蓋舊版。系統會比對工作表名稱與資料內的部門欄位。</div>
-  <div class="field"><label>選擇公司提供的部門版 Excel</label><input id="rentImportFile" type="file" accept=".xlsx,.xls,.xlsm"></div>
+  <div class="field"><label for="rentImportFile">選擇公司提供的部門版 Excel</label><button type="button" id="rentPickFile" style="width:100%;min-height:48px">選擇 Excel 檔案</button><input id="rentImportFile" type="file" accept=".xlsx,.xls,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none" tabindex="-1"><div id="rentPickedName" class="co-small" aria-live="polite">未選擇任何檔案</div></div>
   <div id="rentImportStatus" class="co-small">請先選擇 Excel 檔案。</div>
   <div id="rentImportPreview" style="margin-top:12px"></div>
   <div class="modalactions"><button type="button" id="rentImportCancel">返回</button><button type="button" id="rentImportCommit" class="primary" disabled>確認匯入並建立版本</button></div>
@@ -2140,13 +2140,14 @@ $("rentPeriodClose").onclick=()=>$ ("rentPeriodBack").classList.remove('show');
 $("rentSearch").oninput=renderRentRecords;$("rentStatusFilter").onchange=renderRentRecords;$("rentDeptFilter").onchange=renderRentRecords;
 $("rentMyStoreSelect").onchange=e=>{rentMyStore=e.target.value;try{localStorage.setItem(RENT_MY_STORE_KEY,rentMyStore);}catch(err){}renderRentRecords();};
 $('rentManageStores').onclick=()=>{renderRentStoreMaster();$('rentStoreMasterBack').classList.add('show');};$('rentStoreMasterClose').onclick=()=>{$('rentStoreMasterBack').classList.remove('show');renderRentManager();};
-$("rentOpenImport").onclick=()=>{if(!rentCampaign()){alert('請先建立或選擇檔期。');return;}rentPendingImport=null;$("rentImportFile").value='';$("rentImportPreview").innerHTML='';$("rentImportStatus").textContent='請選擇公司提供的部門版 Excel。';$("rentImportCommit").disabled=true;$("rentImportBack").classList.add('show');};
+$("rentPickFile").onclick=()=>{const input=$("rentImportFile");input.disabled=false;input.click();};
+$("rentOpenImport").onclick=()=>{if(!rentCampaign()){alert('請先建立或選擇檔期。');return;}rentPendingImport=null;$("rentPickedName").textContent="未選擇任何檔案";$("rentImportFile").value='';$("rentImportPreview").innerHTML='';$("rentImportStatus").textContent='請選擇公司提供的部門版 Excel。';$("rentImportCommit").disabled=true;$("rentImportBack").classList.add('show');};
 $("rentImportCancel").onclick=()=>$ ("rentImportBack").classList.remove('show');
 function rentFileDate(name){const m=name.match(/(20\d{6})/);return m?m[1]:'';}
 function rentCell(v){return v===null||v===undefined?'':String(v).trim();}
 function rentIdentity(r){return [r.department,r.vendorCode,r.vendorName,r.itemName,r.campaign].map(x=>String(x||'').trim().toLowerCase()).join('|');}
 $("rentImportFile").addEventListener('change',async e=>{
- const file=e.target.files[0];rentPendingImport=null;$("rentImportCommit").disabled=true;if(!file)return;
+ const file=e.target.files[0];$("rentPickedName").textContent=file?file.name:"未選擇任何檔案";rentPendingImport=null;$("rentImportCommit").disabled=true;if(!file)return;
  if(!window.XLSX){$("rentImportStatus").textContent='Excel 讀取模組尚未載入，請確認網路連線後重新開啟。';return;}
  try{
   const wb=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:false});const parsed=[],warnings=[];
