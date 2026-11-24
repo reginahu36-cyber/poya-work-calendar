@@ -1994,9 +1994,9 @@ let rentDB={campaigns:[],stores:{}}, rentSaved=null, rentReady=null;
 function rentTextDB(){return new Promise((ok,no)=>{const r=indexedDB.open('po_yat_rent_text_db_v1',1);r.onupgradeneeded=()=>r.result.createObjectStore('data');r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error);r.onblocked=()=>no(Error('資料庫被其他頁面占用'));});}
 async function rentTextIO(write,value){const db=await rentTextDB();try{return await new Promise((ok,no)=>{const t=db.transaction('data',write?'readwrite':'readonly'),o=t.objectStore('data');const r=write?o.put(value,RENT_KEY):o.get(RENT_KEY);t.oncomplete=()=>ok(r.result);t.onabort=t.onerror=()=>no(t.error||Error('資料庫交易失敗'));});}finally{db.close();}}
 function rentValidate(raw){const d=JSON.parse(raw);if(!d||!Array.isArray(d.campaigns))throw Error('承租資料格式錯誤');return d;}
-async function rentInit(){if(rentReady)return rentReady;rentReady=(async()=>{let raw=await rentTextIO(false);const old=localStorage.getItem(RENT_KEY);if(raw==null){raw=old||JSON.stringify({campaigns:[],stores:{}});rentValidate(raw);await rentTextIO(true,raw);if(await rentTextIO(false)!==raw)throw Error('移轉驗證失敗');}rentDB=rentValidate(raw);rentDB.stores=rentDB.stores||{};rentSaved=raw;if(old!==null&&old===raw)localStorage.removeItem(RENT_KEY);})();try{await rentReady;}catch(e){rentReady=null;throw e;}}
+async function rentInit(){if(rentReady)return rentReady;rentReady=(async()=>{let raw=await rentTextIO(false);const old=localStorage.getItem(RENT_KEY);if(raw==null){raw=old||JSON.stringify({campaigns:[],stores:{}});rentValidate(raw);await rentTextIO(true,raw);if(await rentTextIO(false)!==raw)throw Error('移轉驗證失敗');}rentDB=rentValidate(raw);rentDB.stores=rentDB.stores||{};rentDB.campaigns.forEach(rentNormalize);rentSaved=raw;if(old!==null&&old===raw)localStorage.removeItem(RENT_KEY);})();try{await rentReady;}catch(e){rentReady=null;throw e;}}
 window.rentBackupRead=async()=>{await rentInit();return await rentTextIO(false);};
-window.rentBackupWrite=async raw=>{await rentInit();raw=raw??JSON.stringify({campaigns:[],stores:{}});rentValidate(raw);await rentTextIO(true,raw);rentSaved=raw;rentDB=rentValidate(raw);rentDB.stores=rentDB.stores||{};};
+window.rentBackupWrite=async raw=>{await rentInit();raw=raw??JSON.stringify({campaigns:[],stores:{}});rentValidate(raw);await rentTextIO(true,raw);rentSaved=raw;rentDB=rentValidate(raw);rentDB.stores=rentDB.stores||{};rentDB.campaigns.forEach(rentNormalize);};
 function migrateLegacyRent(){try{const legacy=JSON.parse(localStorage.getItem("po_yat_rent_items_v2")||"[]");if(!legacy.length||rentDB._legacyMigrated)return;const records=legacy.map(x=>({id:x.id||makeId(),department:x.department||"",campaign:"未分類",vendorCode:"",vendorName:"",itemCategory:"",itemName:x.name||x.shelfName||"舊版承租項目",shelfName:x.name||"",expiry:x.expiry||"",stores:{},photos:x.photos||[],status:x.expiry?'待確認':'待確認',source:'舊版資料'}));if(records.length)rentDB.campaigns.push({id:makeId(),period:"未分類",versions:[{id:makeId(),version:1,sourceName:"舊版長期租賃資料轉入",fileDate:"",importedAt:new Date().toLocaleString('zh-TW'),records,diff:{added:records.length,changed:0,missing:0},final:false}]});rentDB._legacyMigrated=true;}catch(e){console.warn('舊版承租資料保留轉換失敗',e);}}
 let rentActiveCampaignId="",rentPendingImport=null,rentEditingId="";
 
@@ -2044,22 +2044,34 @@ async function rentRenderPhotoStrip(container,ids,allowDelete=false,recordId="")
  }
 }
 
-async function saveRent(){const raw=JSON.stringify(rentDB);try{await rentTextIO(true,raw);rentSaved=raw;}catch(e){rentDB=rentValidate(rentSaved);rentDB.stores=rentDB.stores||{};alert('承租儲存失敗，已保留上次成功資料：'+e.message);throw e;}}
+async function saveRent(){rentDB.campaigns.forEach(rentNormalize);const raw=JSON.stringify(rentDB);try{await rentTextIO(true,raw);rentSaved=raw;}catch(e){rentDB=rentValidate(rentSaved);rentDB.stores=rentDB.stores||{};rentDB.campaigns.forEach(rentNormalize);alert('承租儲存失敗，已保留上次成功資料：'+e.message);throw e;}}
 function rentCampaign(){return rentDB.campaigns.find(c=>c.id===rentActiveCampaignId)||null;}
-function rentCurrentVersion(c=rentCampaign()){
- if(!c||!c.versions||!c.versions.length)return null;
- const latest=c.versions[c.versions.length-1];
- // 同一檔期可分批匯入不同部門：每個部門以最近一次匯入的版本為準，合併成目前工作清單。
- const byDept=new Map();
- c.versions.forEach(v=>{
-  const groups=new Map();
-  (v.records||[]).forEach(r=>{const d=String(r.department||'').trim()||'未分部門';if(!groups.has(d))groups.set(d,[]);groups.get(d).push(r);});
-  groups.forEach((rows,d)=>byDept.set(d,rows));
- });
- const merged=[...byDept.values()].flat();
- if(merged.length)latest.records=merged;
- return latest;
+function rentDepartment(r){return String(r.department||'未分部門').trim()||'未分部門';}
+function rentNormalize(c){
+ const out=[],last=new Map(),counts=new Map();
+ for(const v of c.versions||[]){
+  const groups=new Map();for(const r of v.records||[]){const d=rentDepartment(r);if(!groups.has(d))groups.set(d,[]);groups.get(d).push(r);}
+  for(const r of v.missingRecords||[]){const d=rentDepartment(r);if(!groups.has(d))groups.set(d,[]);}
+  if(v.department&&!groups.has(v.department))groups.set(v.department,[]);
+  for(const [d,rows] of groups){
+   const prev=last.get(d),missing=(v.missingRecords||[]).filter(r=>rentDepartment(r)===d);
+   if(!v.department&&prev&&JSON.stringify(prev.records.map(r=>({...r,status:""})))===JSON.stringify(rows.map(r=>({...r,status:""})))&&!missing.length){continue;}
+   const n=v.department?v.version:(counts.get(d)||0)+1;counts.set(d,Math.max(counts.get(d)||0,n));
+   const x={...v,id:v.department||groups.size===1?v.id:v.id+'-'+encodeURIComponent(d).replace(/%/g,'_'),department:d,version:n,records:rows,missingRecords:missing};
+   if(!v.department){x.legacyVersion=v.version;x.diff={added:rows.filter(r=>!prev?.records.some(o=>o.id===r.id)).length,changed:rows.filter(r=>prev?.records.some(o=>o.id===r.id&&JSON.stringify(o)!==JSON.stringify(r))).length,missing:missing.length};}
+   out.push(x);last.set(d,x);
+  }
+ }
+ const finals=new Map();for(const v of out)if(v.final){if(finals.has(v.department))finals.get(v.department).final=false;finals.set(v.department,v);}
+ c.versions=out;
 }
+function rentCurrentVersion(c=rentCampaign(),draft=false){
+ if(!c?.versions?.length)return null;const groups=new Map();for(const v of c.versions){const d=v.department||rentDepartment(v.records[0]||{});if(!groups.has(d))groups.set(d,[]);groups.get(d).push(v);}
+ const chosen=[...groups.values()].map(vs=>draft?vs.at(-1):(vs.findLast(v=>v.final)||vs.at(-1)));
+ return {records:chosen.flatMap(v=>v.records),final:chosen.every(v=>v.final),version:Math.max(...chosen.map(v=>v.version)),missingRecords:[]};
+}
+function rentNextVersion(c,d){return Math.max(0,...c.versions.filter(v=>v.department===d).map(v=>v.version))+1;}
+function rentDraftFor(c,id){const d=rentDepartment(rentCurrentVersion(c).records.find(r=>r.id===id)||{});return c.versions.filter(v=>v.department===d&&v.records.some(r=>r.id===id)).at(-1);}
 function rentDeptOptions(){const all=[...new Set([...DEPARTMENTS,...rentDB.campaigns.flatMap(c=>(c.versions||[]).flatMap(v=>(v.records||[]).map(r=>r.department).filter(Boolean)))])];return '<option value="">請選擇部門</option>'+all.map(d=>`<option value="${esc(d)}">${esc(d)}</option>`).join("");}
 function rentStoreNames(){return Object.keys(rentDB.stores||{}).sort((a,b)=>a.localeCompare(b,'zh-Hant'));}
 function rentRegisterStores(records){(records||[]).forEach(r=>Object.keys(r.stores||{}).forEach(name=>{if(!rentDB.stores[name])rentDB.stores[name]={name,storeType:'未設定',active:true};}));}
@@ -2083,12 +2095,12 @@ async function openRentManager(){
 function renderRentManager(){
  const sel=$("rentCampaignSelect");sel.innerHTML='<option value="">選擇檔期</option>'+rentDB.campaigns.slice().sort((a,b)=>b.period.localeCompare(a.period)).map(c=>`<option value="${esc(c.id)}" ${c.id===rentActiveCampaignId?'selected':''}>${esc(c.period)}（${(c.versions||[]).length} 版）</option>`).join("");
  const c=rentCampaign(),v=rentCurrentVersion(c);
- $("rentCampaignSummary").innerHTML=c?`<div class="co-record"><div class="co-record-head"><strong>${esc(c.period)} 檔期承租案件</strong><span class="tag" style="background:#f0edff;color:#5140bd">${v&&v.final?'已確認正式版':'尚未確認正式版'}</span></div><div class="co-small">版本數：${c.versions.length}　｜　目前版本：${v?'V'+v.version:'尚無匯入版本'}　｜　承租筆數：${v?v.records.length:0}</div><div class="co-small">檔期與實際到期日分開管理；到期日必須逐筆確認。</div></div>`:'<div class="empty">請先建立檔期，或匯入 Excel 後建立檔期。</div>';
+ $("rentCampaignSummary").innerHTML=c?`<div class="co-record"><div class="co-record-head"><strong>${esc(c.period)} 檔期承租案件</strong><span class="tag" style="background:#f0edff;color:#5140bd">${v&&v.final?'已確認正式版':'尚未確認正式版'}</span></div><div class="co-small">版本數：${c.versions.length}　｜　部門數：${new Set(c.versions.map(x=>x.department)).size}　｜　承租筆數：${v?v.records.length:0}</div><div class="co-small">檔期與實際到期日分開管理；到期日必須逐筆確認。</div></div>`:'<div class="empty">請先建立檔期，或匯入 Excel 後建立檔期。</div>';
  renderRentVersions();rentRegisterStores(v?.records||[]);renderRentFilters();renderRentRecords();
 }
 function renderRentVersions(){
  const c=rentCampaign(),box=$("rentVersionList");if(!c||!c.versions.length){box.innerHTML='<div class="empty">此檔期尚無 Excel 修訂版本。</div>';return;}
- box.innerHTML=c.versions.slice().reverse().map(v=>`<div class="co-record"><div class="co-record-head"><strong>V${v.version}　${esc(v.sourceName||'手動建立')}</strong><span class="tag" style="background:${v.final?'#e7f6ed':'#fff4df'};color:${v.final?'#237447':'#946200'}">${v.final?'正式確認版':'待確認'}</span></div><div class="co-small">檔案日期：${esc(v.fileDate||'未提供')}　｜　匯入時間：${esc(v.importedAt||'')}</div><div class="co-small">${v.records.length} 筆資料　｜　新增 ${v.diff?.added||0}、修改 ${v.diff?.changed||0}、分店異動 ${v.diff?.storeChanges||0}、新版未列入 ${v.diff?.missing||0}</div><div class="co-toolbar" style="margin:8px 0 0"><button type="button" onclick="rentViewVersion('${v.id}')">查看此版本</button>${!v.final?`<button type="button" class="primary" onclick="rentConfirmVersion('${v.id}')">確認為正式版</button>`:''}<button type="button" class="danger" onclick="rentDeleteVersion('${v.id}')">刪除版本</button></div></div>`).join("");
+ box.innerHTML=[...new Set(c.versions.map(v=>v.department))].map(d=>`<details class="co-record"><summary><strong>${esc(d)}</strong>　${c.versions.some(v=>v.department===d&&v.final)?"已有正式版":"待確認"}</summary>${c.versions.filter(v=>v.department===d).slice().reverse().map(v=>`<div class="co-record"><div class="co-record-head"><strong>V${v.version}　${esc(v.sourceName||'手動建立')}</strong><span class="tag" style="background:${v.final?'#e7f6ed':'#fff4df'};color:${v.final?'#237447':'#946200'}">${v.final?'正式確認版':'待確認'}</span></div><div class="co-small">檔案日期：${esc(v.fileDate||'未提供')}　｜　匯入時間：${esc(v.importedAt||'')}</div><div class="co-small">${v.records.length} 筆資料　｜　新增 ${v.diff?.added||0}、修改 ${v.diff?.changed||0}、分店異動 ${v.diff?.storeChanges||0}、新版未列入 ${v.diff?.missing||0}</div><div class="co-toolbar" style="margin:8px 0 0"><button type="button" onclick="rentViewVersion('${v.id}')">查看此版本</button>${!v.final?`<button type="button" class="primary" onclick="rentConfirmVersion('${v.id}')">確認為正式版</button>`:''}<button type="button" class="danger" onclick="rentDeleteVersion('${v.id}')">刪除版本</button></div></div>`).join("")}</details>`).join("");
 }
 window.rentDeleteVersion=async id=>{
  const c=rentCampaign();if(!c)return;
@@ -2126,8 +2138,8 @@ function renderRentRecords(){
  box.querySelectorAll('[data-inline-save]').forEach(btn=>btn.onclick=async()=>{
   const id=btn.dataset.inlineSave,expiry=box.querySelector(`[data-inline-expiry="${id}"]`).value,status=box.querySelector(`[data-inline-record-status="${id}"]`).value,files=[...(box.querySelector(`[data-inline-photos="${id}"]`)?.files||[])],vendor=box.querySelector(`[data-inline-vendor="${id}"]`).value.trim(),item=box.querySelector(`[data-inline-item="${id}"]`).value.trim();
   if(!expiry||!vendor||!item){alert('廠商名稱、承租項目及到期日為必填。');return;}
-  const c=rentCampaign(),base=rentCurrentVersion(c);if(!base)return;
-  const version={...base,id:makeId(),version:c.versions.length+1,sourceName:'承租項目快速編輯',importedAt:new Date().toLocaleString('zh-TW'),records:base.records.map(x=>({...x,stores:{...(x.stores||{})},storeDecisions:{...(x.storeDecisions||{})},photos:[...(x.photos||[])]})),diff:{added:0,changed:1,missing:0},final:false};
+  const c=rentCampaign(),base=rentDraftFor(c,id);if(!base)return;
+  const version={...base,id:makeId(),version:rentNextVersion(c,base.department),sourceName:'承租項目快速編輯',importedAt:new Date().toLocaleString('zh-TW'),records:base.records.map(x=>({...x,stores:{...(x.stores||{})},storeDecisions:{...(x.storeDecisions||{})},photos:[...(x.photos||[])]})),diff:{added:0,changed:1,missing:0},final:false};
   const record=version.records.find(x=>x.id===id);if(!record)return;
   record.expiry=expiry;record.status=status;record.vendorName=vendor;record.itemName=item;record.vendorCode=box.querySelector(`[data-inline-code="${id}"]`).value.trim();record.delivery=box.querySelector(`[data-inline-delivery="${id}"]`).value.trim();record.warehouse=box.querySelector(`[data-inline-warehouse="${id}"]`).value.trim();record.fee=box.querySelector(`[data-inline-fee="${id}"]`).value.trim();record.campaignNote=box.querySelector(`[data-inline-note="${id}"]`).value;
   try{for(const file of files)record.photos.push(await rentPhotoPut(file));}
@@ -2166,7 +2178,7 @@ $("rentImportFile").addEventListener('change',async e=>{
    }
   }
   if(!parsed.length)throw new Error('沒有讀取到承租資料，請確認第一列為欄位名稱。');
-  const c=rentCampaign(),prev=rentCurrentVersion(c),prevMap=new Map();(prev?.records||[]).forEach(r=>{const k=rentIdentity(r);if(!prevMap.has(k))prevMap.set(k,[]);prevMap.get(k).push(r);});
+  const c=rentCampaign(),prev=rentCurrentVersion(c,true),prevMap=new Map();(prev?.records||[]).forEach(r=>{const k=rentIdentity(r);if(!prevMap.has(k))prevMap.set(k,[]);prevMap.get(k).push(r);});
   parsed.forEach(r=>{const matches=prevMap.get(rentIdentity(r))||[];if(matches.length===1){r.id=matches[0].id;r.expiry=matches[0].expiry||'';r.status=matches[0].status||'待確認';r._matched=true;}else if(matches.length>1){r._ambiguous=true;}});
   rentRegisterStores(parsed);
   const fileDate=rentFileDate(file.name);rentPendingImport={records:parsed,sourceName:file.name,fileDate,sheetNames:wb.SheetNames};
@@ -2183,7 +2195,7 @@ $("rentImportCommit").onclick=async()=>{
  if(!rentPendingImport)return;const activePeriod=rentCampaign().period;const periodMismatch=rentPendingImport.records.filter(r=>r.campaign&&r.campaign!==activePeriod);if(periodMismatch.length){alert(`Excel 內有 ${periodMismatch.length} 筆資料的檔期不是目前選取的 ${activePeriod}。請切換或建立正確檔期後重新匯入，避免混入不同檔期。`);return;}
  const unresolved=rentPendingImport.records.filter(r=>!r.expiry||r.deptMismatch||r._ambiguous);
  if(unresolved.length){alert(`還有 ${unresolved.length} 筆資料需要處理：到期日未填、工作表與部門不一致，或版本比對不唯一。請先完成確認。`);return;}
- const c=rentCampaign(),prev=rentCurrentVersion(c),old=prev?.records||[],newRows=rentPendingImport.records;
+ const c=rentCampaign(),prev=rentCurrentVersion(c,true),old=prev?.records||[],newRows=rentPendingImport.records;
  const importedDepts=new Set(newRows.map(r=>String(r.department||'未分部門').trim()));
  const oldTarget=old.filter(r=>importedDepts.has(String(r.department||'未分部門').trim()));
  const preserved=old.filter(r=>!importedDepts.has(String(r.department||'未分部門').trim()));
@@ -2191,12 +2203,12 @@ $("rentImportCommit").onclick=async()=>{
  newRows.forEach(r=>{const o=oldMap.get(rentIdentity(r));if(!o){added++;return;}if(JSON.stringify({...o,id:'',status:'',expiry:''})!==JSON.stringify({...r,id:'',status:'',expiry:''}))changed++;});
  const newKeys=new Set(newRows.map(rentIdentity)),missing=oldTarget.filter(r=>r.status!=='已取消'&&!newKeys.has(rentIdentity(r))).length;let storeChanges=0;newRows.forEach(r=>{const o=oldMap.get(rentIdentity(r));if(o&&JSON.stringify(o.stores||{})!==JSON.stringify(r.stores||{}))storeChanges++;});
  const missingRecords=oldTarget.filter(r=>r.status!=='已取消'&&!newKeys.has(rentIdentity(r))).map(r=>({...r,reviewStatus:'新版未列入／待確認'}));
- const mergedRows=[...preserved,...newRows.map(r=>({...r,status:r.status||'待確認'}))];
+ const mergedRows=[...newRows.map(r=>({...r,status:r.status||'待確認'}))];
  const version={id:makeId(),version:(c.versions?.length||0)+1,sourceName:rentPendingImport.sourceName,fileDate:rentPendingImport.fileDate,importedAt:new Date().toLocaleString('zh-TW'),records:mergedRows,missingRecords,diff:{added,changed,missing,storeChanges},final:false};
  const commit=$("rentImportCommit"),cancel=$("rentImportCancel");
  commit.disabled=true;cancel.disabled=true;commit.textContent='儲存中…';
  const previousStores={...rentDB.stores};
- try{c.versions.push(version);rentRegisterStores(version.records);await saveRent();}
+ try{for(const d of importedDepts){const rows=version.records.filter(r=>rentDepartment(r)===d),prior=oldTarget.filter(r=>rentDepartment(r)===d),missing=missingRecords.filter(r=>rentDepartment(r)===d);c.versions.push({...version,id:makeId(),department:d,version:rentNextVersion(c,d),records:rows,missingRecords:missing,diff:{added:rows.filter(r=>!prior.some(o=>rentIdentity(o)===rentIdentity(r))).length,changed:rows.filter(r=>prior.some(o=>rentIdentity(o)===rentIdentity(r)&&JSON.stringify(o)!==JSON.stringify(r))).length,missing:missing.length,storeChanges:rows.filter(r=>prior.some(o=>rentIdentity(o)===rentIdentity(r)&&JSON.stringify(o.stores)!==JSON.stringify(r.stores))).length}});}rentRegisterStores(version.records);await saveRent();}
  catch(err){c.versions=c.versions.filter(v=>v.id!==version.id);rentDB.stores=previousStores;commit.disabled=false;cancel.disabled=false;commit.textContent='確認匯入並建立版本';$("rentImportStatus").textContent='儲存失敗，尚未建立版本：'+err.message;return;}
  rentPendingImport=null;
  $("rentImportBack").classList.remove('show');
@@ -2205,7 +2217,7 @@ $("rentImportCommit").onclick=async()=>{
  commit.textContent='確認匯入並建立版本';cancel.disabled=false;
  requestAnimationFrame(()=>{
   try{renderRentManager();}catch(err){console.error(err);alert('V'+version.version+' 已儲存，但畫面更新失敗。請重新進入承租管理，不必再次匯入。');return;}
-  const notice=document.createElement('div');notice.setAttribute('role','status');notice.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:9999;background:#237447;color:white;padding:12px 18px;border-radius:12px;max-width:90vw;box-shadow:0 3px 16px #0003';notice.textContent=`匯入完成，已建立 V${version.version}（${version.records.length} 筆）`;document.body.appendChild(notice);setTimeout(()=>notice.remove(),4500);
+  const notice=document.createElement('div');notice.setAttribute('role','status');notice.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:9999;background:#237447;color:white;padding:12px 18px;border-radius:12px;max-width:90vw;box-shadow:0 3px 16px #0003';notice.textContent=`匯入完成，已建立 ${importedDepts.size} 個部門版本（${version.records.length} 筆）`;document.body.appendChild(notice);setTimeout(()=>notice.remove(),4500);
  });
 };
 function rentOpenManual(){if(!rentCampaign()){alert('請先建立檔期。');return;}rentEditingId='';$("rentFormTitle").textContent='手動新增承租';$("rentDept").innerHTML=rentDeptOptions();$("rentFormCampaign").value=rentCampaign().period;['rentVendorCode','rentVendorName','rentItemCategory','rentItemName','rentCampaignNote','rentExpiry','rentDelivery','rentFee','rentShelfName'].forEach(id=>$(id).value='');$("rentWarehouse").value='';$("rentPhotos").value='';$("rentPhotoPreview").innerHTML='';const stores=rentStoreNames().filter(n=>rentDB.stores[n]?.active!==false);$('rentManualStoreList').innerHTML=stores.length?stores.map(name=>`<div class="co-toolbar" style="justify-content:space-between;border-bottom:1px solid var(--line);padding:6px 0"><div><strong>${esc(name)}</strong><div class="co-small">${esc(rentDB.stores[name]?.storeType||'店型未設定')}</div></div><select data-manual-store="${esc(name)}" style="min-width:120px;padding:7px"><option>待確認</option><option>承租</option><option>不承租</option></select></div>`).join(''):'<div class="empty">尚未匯入分店欄位。可先建立承租項目，取得部門版 Excel 後再設定分店。</div>';$('rentFormBack').classList.add('show');}
@@ -2229,12 +2241,12 @@ $("rentAddShelf").onclick=async()=>{
  catch(err){alert("照片儲存失敗："+err.message+"。承租資料尚未儲存，請稍後重試。");return;}
  const stores={};$('rentManualStoreList').querySelectorAll('[data-manual-store]').forEach(el=>stores[el.dataset.manualStore]=el.value);
  const record={id:makeId(),department:dept,campaign:period,expiry,vendorCode:$("rentVendorCode").value.trim(),vendorName:vendor,itemCategory:$("rentItemCategory").value.trim(),itemName:item,campaignNote:$("rentCampaignNote").value.trim(),delivery:$("rentDelivery").value.trim(),warehouse:$("rentWarehouse").value,fee:$("rentFee").value.trim(),shelfName:$("rentShelfName").value.trim(),stores,photos,status:'待確認',source:'手動建立'};
- let v=rentCurrentVersion(c);if(!v){v={id:makeId(),version:1,sourceName:'手動建立',fileDate:'',importedAt:new Date().toLocaleString('zh-TW'),records:[],diff:{added:0,changed:0,missing:0},final:false};c.versions.push(v);}else{v={...v,id:makeId(),version:c.versions.length+1,sourceName:'手動新增修訂',fileDate:'',importedAt:new Date().toLocaleString('zh-TW'),records:v.records.map(x=>({...x})),diff:{added:1,changed:0,missing:0},final:false};c.versions.push(v);}v.records.push(record);v.diff.added=(v.diff.added||0)+1;await saveRent();$("rentFormBack").classList.remove('show');renderRentManager();
+ let v=c.versions.filter(x=>x.department===dept).at(-1);if(!v){v={id:makeId(),version:1,department:dept,sourceName:'手動建立',fileDate:'',importedAt:new Date().toLocaleString('zh-TW'),records:[],diff:{added:0,changed:0,missing:0},final:false};c.versions.push(v);}else{v={...v,id:makeId(),version:rentNextVersion(c,dept),sourceName:'手動新增修訂',fileDate:'',importedAt:new Date().toLocaleString('zh-TW'),records:v.records.map(x=>({...x})),diff:{added:1,changed:0,missing:0},final:false};c.versions.push(v);}v.records.push(record);v.diff.added=(v.diff.added||0)+1;await saveRent();$("rentFormBack").classList.remove('show');renderRentManager();
 };
 window.rentViewVersion=id=>{const c=rentCampaign(),v=c?.versions.find(x=>x.id===id);if(!v)return;const missing=v.diff?.missing||0;$("rentDetailTitle").textContent=`${c.period}｜V${v.version} 版本內容`;
  $("rentDetailBody").innerHTML=`<div class="co-record"><strong>${esc(v.sourceName)}</strong><div class="co-small">檔案日期：${esc(v.fileDate||'未提供')}　｜　匯入：${esc(v.importedAt)}</div><div class="co-small">新增 ${v.diff?.added||0}、修改 ${v.diff?.changed||0}、分店異動 ${v.diff?.storeChanges||0}、新版未列入 ${missing}</div><div class="co-small">新版未列入不等於取消；請逐筆確認。</div></div>${v.records.map(r=>`<div class="co-record"><strong>${esc(r.vendorName)}｜${esc(r.itemName)}</strong><div class="co-small">${esc(r.department)}　到期日：${esc(r.expiry||'未設定')}　狀態：${esc(r.status||'待確認')}</div></div>`).join('')}<h3>上一版有、新版未列入（不代表取消）</h3>${(v.missingRecords||[]).map(r=>`<div class="co-record"><strong>${esc(r.vendorName)}｜${esc(r.itemName)}</strong><div class="co-small">${esc(r.department)}　目前判定：${esc(r.reviewStatus||'新版未列入／待確認')}</div>${r.reviewStatus==='新版未列入／待確認'?`<button type="button" onclick="rentResolveMissing('${v.id}','${r.id}','cancel')">確認已取消</button> <button type="button" onclick="rentResolveMissing('${v.id}','${r.id}','retain')">保留上一版資料</button>`:''}</div>`).join('')||'<div class="empty">沒有上一版未列入項目。</div>'}`;
  $("rentDetailBack").classList.add('show');};
-window.rentConfirmVersion=async id=>{const c=rentCampaign(),v=c?.versions.find(x=>x.id===id);if(!v)return;if(v.records.some(r=>!r.expiry)){alert('仍有承租項目未設定到期日，無法確認正式版。');return;}if((v.missingRecords||[]).some(r=>r.reviewStatus==='新版未列入／待確認')){alert('仍有上一版未列入的資料尚未確認。請逐筆選擇「確認已取消」或「保留上一版資料」。');return;}if(!confirm(`確認將 ${c.period} V${v.version} 設為正式確認版？舊版本仍會保留。`))return;c.versions.forEach(x=>x.final=false);v.final=true;v.records.forEach(r=>{if(r.status==='待確認')r.status='承租中';});await saveRent();$("rentPeriodBack").classList.add('show');renderRentManager();requestAnimationFrame(()=>renderRentRecords());};
+window.rentConfirmVersion=async id=>{const c=rentCampaign(),v=c?.versions.find(x=>x.id===id);if(!v)return;if(v.records.some(r=>!r.expiry)){alert('仍有承租項目未設定到期日，無法確認正式版。');return;}if((v.missingRecords||[]).some(r=>r.reviewStatus==='新版未列入／待確認')){alert('仍有上一版未列入的資料尚未確認。請逐筆選擇「確認已取消」或「保留上一版資料」。');return;}if(!confirm(`確認將 ${c.period} ${v.department} V${v.version} 設為正式確認版？舊版本仍會保留。`))return;c.versions.filter(x=>x.department===v.department).forEach(x=>x.final=false);v.final=true;v.records.forEach(r=>{if(r.status==='待確認')r.status='承租中';});await saveRent();$("rentPeriodBack").classList.add('show');renderRentManager();requestAnimationFrame(()=>renderRentRecords());};
 window.rentResolveMissing=async(versionId,recordId,action)=>{const c=rentCampaign(),v=c?.versions.find(x=>x.id===versionId),r=v?.missingRecords?.find(x=>x.id===recordId);if(!r)return;if(action==='cancel'){if(!confirm('確認此筆在新版本中已取消承租？舊版本資料仍會保留。'))return;r.reviewStatus='已確認取消';}else if(action==='retain'){if(!confirm('將上一版這筆資料沿用至此版本？'))return;if(!v.records.some(x=>x.id===r.id)){const copy={...r,status:'承租中'};delete copy.reviewStatus;v.records.push(copy);}r.reviewStatus='已確認保留';v.final=false;}await saveRent();rentViewVersion(versionId);};
 window.rentOpenDetail=id=>{
  const c=rentCampaign(),v=rentCurrentVersion(c),r=v?.records.find(x=>x.id===id);if(!r)return;
@@ -2250,15 +2262,15 @@ window.rentOpenDetail=id=>{
  $("rentDetailBack").classList.add('show');rentRenderPhotoStrip($("rentDetailPhotos"),r.photos||[],true,r.id);
 };
 window.rentRemoveDetailPhoto=async(recordId,photoId)=>{
- const c=rentCampaign(),base=rentCurrentVersion(c);if(!base)return;
- const v={...base,id:makeId(),version:c.versions.length+1,sourceName:'照片異動修訂',importedAt:new Date().toLocaleString('zh-TW'),records:base.records.map(x=>({...x,stores:{...(x.stores||{})},storeDecisions:{...(x.storeDecisions||{})},photos:[...(x.photos||[])]})),diff:{added:0,changed:1,missing:0},final:false};
+ const c=rentCampaign(),base=rentDraftFor(c,recordId);if(!base)return;
+ const v={...base,id:makeId(),version:rentNextVersion(c,base.department),sourceName:'照片異動修訂',importedAt:new Date().toLocaleString('zh-TW'),records:base.records.map(x=>({...x,stores:{...(x.stores||{})},storeDecisions:{...(x.storeDecisions||{})},photos:[...(x.photos||[])]})),diff:{added:0,changed:1,missing:0},final:false};
  const r=v.records.find(x=>x.id===recordId);if(!r)return;r.photos=(r.photos||[]).filter(x=>x!==photoId);c.versions.push(v);await saveRent();rentOpenDetail(recordId);renderRentRecords();
 };
-window.rentSaveDetail=async id=>{const c=rentCampaign(),base=rentCurrentVersion(c);if(!base)return;const d=$("rentDetailExpiry").value;if(!d){alert('到期日期為必填。');return;}const decisions={};$('rentDetailBody').querySelectorAll('[data-rent-store-decision]').forEach(el=>decisions[el.dataset.rentStoreDecision]=el.value);const v={...base,id:makeId(),version:c.versions.length+1,sourceName:'手動異動修訂',importedAt:new Date().toLocaleString('zh-TW'),records:base.records.map(x=>({...x,stores:{...(x.stores||{})},storeDecisions:{...(x.storeDecisions||{})},photos:[...(x.photos||[])]})),diff:{added:0,changed:1,missing:0},final:false};const r=v.records.find(x=>x.id===id);if(!r)return;r.expiry=d;r.status=$("rentDetailStatus").value;r.storeDecisions={...(r.storeDecisions||{}),...decisions};
+window.rentSaveDetail=async id=>{const c=rentCampaign(),base=rentDraftFor(c,id);if(!base)return;const d=$("rentDetailExpiry").value;if(!d){alert('到期日期為必填。');return;}const decisions={};$('rentDetailBody').querySelectorAll('[data-rent-store-decision]').forEach(el=>decisions[el.dataset.rentStoreDecision]=el.value);const v={...base,id:makeId(),version:rentNextVersion(c,base.department),sourceName:'手動異動修訂',importedAt:new Date().toLocaleString('zh-TW'),records:base.records.map(x=>({...x,stores:{...(x.stores||{})},storeDecisions:{...(x.storeDecisions||{})},photos:[...(x.photos||[])]})),diff:{added:0,changed:1,missing:0},final:false};const r=v.records.find(x=>x.id===id);if(!r)return;r.expiry=d;r.status=$("rentDetailStatus").value;r.storeDecisions={...(r.storeDecisions||{}),...decisions};
  try{for(const file of [...$("rentDetailPhotoFiles").files])r.photos.push(await rentPhotoPut(file));}
  catch(err){alert("照片儲存失敗："+err.message+"。本次異動尚未儲存。");return;}
  c.versions.push(v);await saveRent();$("rentDetailBack").classList.remove('show');renderRentManager();};
-window.rentMarkCancelled=async id=>{const c=rentCampaign(),base=rentCurrentVersion(c);if(!base)return;const source=base.records.find(x=>x.id===id);if(!source)return;if(!confirm('確認將此筆承租標記為「已取消」？系統會建立新修訂版，舊版本不變。'))return;const v={...base,id:makeId(),version:c.versions.length+1,sourceName:'手動取消修訂',importedAt:new Date().toLocaleString('zh-TW'),records:base.records.map(x=>({...x,stores:{...(x.stores||{})},photos:[...(x.photos||[])]})),diff:{added:0,changed:1,missing:0},final:false};v.records.find(x=>x.id===id).status='已取消';c.versions.push(v);await saveRent();renderRentManager();};
+window.rentMarkCancelled=async id=>{const c=rentCampaign(),base=rentDraftFor(c,id);if(!base)return;const source=base.records.find(x=>x.id===id);if(!source)return;if(!confirm('確認將此筆承租標記為「已取消」？系統會建立新修訂版，舊版本不變。'))return;const v={...base,id:makeId(),version:rentNextVersion(c,base.department),sourceName:'手動取消修訂',importedAt:new Date().toLocaleString('zh-TW'),records:base.records.map(x=>({...x,stores:{...(x.stores||{})},photos:[...(x.photos||[])]})),diff:{added:0,changed:1,missing:0},final:false};v.records.find(x=>x.id===id).status='已取消';c.versions.push(v);await saveRent();renderRentManager();};
 $("rentDetailClose").onclick=()=>$ ("rentDetailBack").classList.remove('show');
 $("rentExportBackup").onclick=async()=>{
  try{
